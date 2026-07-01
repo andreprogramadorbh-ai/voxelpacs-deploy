@@ -1,127 +1,146 @@
 #!/usr/bin/env bash
 # =============================================================================
 # VOXEL PACS — healthcheck.sh
-# Verifica: Docker, OHIF, Nginx, SSL, Orthanc remoto, DICOMWeb, Portas, DNS
+# Valida: Docker, Compose, containers, Nginx, OHIF, Orthanc, DICOMweb, SSL
 # =============================================================================
 set -euo pipefail
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
-ok()   { echo -e "  ${GREEN}✅ $*${NC}"; }
-fail() { echo -e "  ${RED}❌ $*${NC}"; ERRORS=$((ERRORS+1)); }
-warn() { echo -e "  ${YELLOW}⚠️  $*${NC}"; }
-section() { echo -e "\n${BOLD}${BLUE}── $* ──${NC}"; }
+ok()   { echo -e "  ${GREEN}✔${NC} $*"; }
+fail() { echo -e "  ${RED}✘${NC} $*"; ERRORS=$((ERRORS+1)); }
+warn() { echo -e "  ${YELLOW}⚠${NC} $*"; }
+section() {
+    echo -e "\n${BOLD}${BLUE}══════════════════════════════════════════${NC}"
+    echo -e "${BOLD}${CYAN}  $*${NC}"
+    echo -e "${BOLD}${BLUE}══════════════════════════════════════════${NC}\n"
+}
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 ERRORS=0
 
-[ -f ".env" ] && source .env || true
+[ -f ".env" ] && source .env || { echo -e "${RED}[ERROR]${NC} .env não encontrado."; exit 1; }
 
+DOMAIN_VAL="${DOMAIN:-localhost}"
+ORTHANC_URL="${ORTHANC_PROTOCOL:-http}://${ORTHANC_HOST:-localhost}:${ORTHANC_PORT:-8042}"
+OHIF_PORT_VAL="${OHIF_PORT:-3000}"
+
+echo -e "\n${BOLD}${BLUE}  VOXEL PACS — Health Check${NC}"
+echo -e "  $(date '+%d/%m/%Y %H:%M:%S') | Domínio: ${DOMAIN_VAL}\n"
+
+# ── Docker ────────────────────────────────────────────────────────────────────
 section "Docker"
 if command -v docker &>/dev/null; then
     ok "Docker instalado: $(docker --version)"
 else
-    fail "Docker não encontrado"
+    fail "Docker não encontrado."
 fi
 
-if docker compose version &>/dev/null; then
-    ok "Docker Compose: $(docker compose version)"
+# ── Docker Compose ────────────────────────────────────────────────────────────
+section "Docker Compose"
+if command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE="docker-compose"
+    ok "Docker Compose V1: $(docker-compose --version)"
+elif docker compose version >/dev/null 2>&1; then
+    COMPOSE="docker compose"
+    ok "Docker Compose V2: $(docker compose version)"
 else
-    fail "Docker Compose Plugin não encontrado"
+    fail "Docker Compose não encontrado."
+    COMPOSE="docker compose"
 fi
 
+# ── Containers ────────────────────────────────────────────────────────────────
 section "Containers"
 for CONTAINER in voxelpacs-ohif voxelpacs-nginx; do
-    STATUS=$(docker inspect --format='{{.State.Status}}' "$CONTAINER" 2>/dev/null || echo "not_found")
-    HEALTH=$(docker inspect --format='{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || echo "no_healthcheck")
-    if [[ "$STATUS" == "running" ]]; then
-        if [[ "$HEALTH" == "healthy" ]]; then
-            ok "${CONTAINER}: running (healthy)"
-        elif [[ "$HEALTH" == "no_healthcheck" ]]; then
-            ok "${CONTAINER}: running"
-        else
-            warn "${CONTAINER}: running (${HEALTH})"
-        fi
+    STATUS=$(docker inspect --format='{{.State.Status}}' "$CONTAINER" 2>/dev/null || echo "not found")
+    if [ "$STATUS" = "running" ]; then
+        ok "Container ${CONTAINER}: running"
     else
-        fail "${CONTAINER}: ${STATUS}"
+        fail "Container ${CONTAINER}: ${STATUS}"
     fi
 done
 
-section "Portas"
-for PORT in 80 443; do
-    if ss -tlnp 2>/dev/null | grep -q ":${PORT} " || netstat -tlnp 2>/dev/null | grep -q ":${PORT} "; then
-        ok "Porta ${PORT}: aberta"
-    else
-        warn "Porta ${PORT}: não detectada (pode estar dentro do container)"
-    fi
-done
-
-section "HTTP/HTTPS"
-DOMAIN="${DOMAIN:-view.voxelpacs.com.br}"
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "http://${DOMAIN}/" 2>/dev/null || echo "000")
-if [[ "$HTTP_CODE" =~ ^(200|301|302)$ ]]; then
-    ok "HTTP (${DOMAIN}): ${HTTP_CODE}"
+# ── Nginx ─────────────────────────────────────────────────────────────────────
+section "Nginx"
+if systemctl is-active --quiet nginx 2>/dev/null; then
+    ok "Nginx (systemd): ativo"
+elif docker inspect voxelpacs-nginx &>/dev/null; then
+    ok "Nginx (Docker): container em execução"
 else
-    warn "HTTP (${DOMAIN}): ${HTTP_CODE} (pode precisar de SSL)"
+    fail "Nginx não está ativo."
 fi
 
-HTTPS_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 10 "https://${DOMAIN}/" 2>/dev/null || echo "000")
-if [[ "$HTTPS_CODE" == "200" ]]; then
-    ok "HTTPS (${DOMAIN}): ${HTTPS_CODE}"
+# ── OHIF Viewer ───────────────────────────────────────────────────────────────
+section "OHIF Viewer"
+OHIF_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+    "http://127.0.0.1:${OHIF_PORT_VAL}" --max-time 10 2>/dev/null || echo "000")
+if [[ "$OHIF_CODE" == "200" ]]; then
+    ok "OHIF acessível: http://127.0.0.1:${OHIF_PORT_VAL} (HTTP ${OHIF_CODE})"
 else
-    warn "HTTPS (${DOMAIN}): ${HTTPS_CODE}"
+    fail "OHIF retornou HTTP ${OHIF_CODE}"
 fi
 
+# ── Orthanc ───────────────────────────────────────────────────────────────────
+section "Orthanc"
+ORTHANC_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+    -u "${ORTHANC_USERNAME:-}:${ORTHANC_PASSWORD:-}" \
+    "${ORTHANC_URL}/system" --max-time 10 2>/dev/null || echo "000")
+if [[ "$ORTHANC_CODE" == "200" ]]; then
+    ok "Orthanc acessível: ${ORTHANC_URL} (HTTP ${ORTHANC_CODE})"
+else
+    fail "Orthanc retornou HTTP ${ORTHANC_CODE} — URL: ${ORTHANC_URL}"
+fi
+
+# ── DICOMweb ──────────────────────────────────────────────────────────────────
+section "DICOMweb"
+DICOM_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+    -u "${ORTHANC_USERNAME:-}:${ORTHANC_PASSWORD:-}" \
+    "${ORTHANC_URL}/dicom-web/studies" --max-time 10 2>/dev/null || echo "000")
+if [[ "$DICOM_CODE" == "200" ]]; then
+    ok "DICOMweb acessível: ${ORTHANC_URL}/dicom-web/studies (HTTP ${DICOM_CODE})"
+else
+    fail "DICOMweb retornou HTTP ${DICOM_CODE}"
+fi
+
+# ── SSL ───────────────────────────────────────────────────────────────────────
 section "SSL"
-SSL_CERT="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
-if [ -f "$SSL_CERT" ]; then
-    EXPIRY=$(openssl x509 -enddate -noout -in "$SSL_CERT" 2>/dev/null | cut -d= -f2)
-    DAYS_LEFT=$(( ( $(date -d "$EXPIRY" +%s) - $(date +%s) ) / 86400 ))
-    if [[ $DAYS_LEFT -gt 30 ]]; then
-        ok "SSL válido — expira em ${DAYS_LEFT} dias (${EXPIRY})"
-    elif [[ $DAYS_LEFT -gt 0 ]]; then
-        warn "SSL expira em ${DAYS_LEFT} dias — renovar em breve!"
+CERT_PATH="/etc/letsencrypt/live/${DOMAIN_VAL}/fullchain.pem"
+if [ -f "$CERT_PATH" ]; then
+    EXPIRY=$(openssl x509 -enddate -noout -in "$CERT_PATH" 2>/dev/null | cut -d= -f2 || echo "desconhecido")
+    DAYS_LEFT=$(( ( $(date -d "$EXPIRY" +%s 2>/dev/null || echo 0) - $(date +%s) ) / 86400 ))
+    if [ "$DAYS_LEFT" -gt 14 ]; then
+        ok "Certificado SSL válido. Expira em: ${EXPIRY} (${DAYS_LEFT} dias)"
+    elif [ "$DAYS_LEFT" -gt 0 ]; then
+        warn "Certificado SSL expira em ${DAYS_LEFT} dias! Renove em breve: certbot renew"
     else
-        fail "SSL expirado!"
+        fail "Certificado SSL expirado!"
     fi
 else
-    warn "Certificado SSL não encontrado em ${SSL_CERT}"
+    warn "Certificado SSL não encontrado em ${CERT_PATH}. Execute: bash scripts/generate-ssl.sh"
 fi
 
-section "Orthanc Remoto"
-ORTHANC_PROTOCOL="${ORTHANC_PROTOCOL:-https}"
-ORTHANC_HOST="${ORTHANC_HOST:-dicom.voxelpacs.com.br}"
-ORTHANC_PORT="${ORTHANC_PORT:-8042}"
-ORTHANC_URL="${ORTHANC_PROTOCOL}://${ORTHANC_HOST}:${ORTHANC_PORT}"
-
-ORTHANC_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 10 "${ORTHANC_URL}/system" 2>/dev/null || echo "000")
-if [[ "$ORTHANC_CODE" =~ ^(200|401)$ ]]; then
-    ok "Orthanc acessível em ${ORTHANC_URL} (HTTP ${ORTHANC_CODE})"
+# ── HTTPS público ─────────────────────────────────────────────────────────────
+section "HTTPS público"
+HTTPS_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+    "https://${DOMAIN_VAL}" --max-time 15 2>/dev/null || echo "000")
+if [[ "$HTTPS_CODE" == "200" ]]; then
+    ok "HTTPS acessível: https://${DOMAIN_VAL} (HTTP ${HTTPS_CODE})"
+elif [[ "$HTTPS_CODE" == "000" ]]; then
+    warn "HTTPS não acessível — DNS pode não estar apontando para este servidor."
 else
-    fail "Orthanc não acessível em ${ORTHANC_URL} (HTTP ${ORTHANC_CODE})"
+    warn "HTTPS retornou HTTP ${HTTPS_CODE}"
 fi
 
-section "DICOMWeb"
-DICOMWEB_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 10 "${ORTHANC_URL}/dicom-web/studies" 2>/dev/null || echo "000")
-if [[ "$DICOMWEB_CODE" =~ ^(200|401)$ ]]; then
-    ok "DICOMWeb endpoint acessível (HTTP ${DICOMWEB_CODE})"
-else
-    warn "DICOMWeb endpoint: HTTP ${DICOMWEB_CODE} (verifique autenticação)"
-fi
-
-section "DNS"
-if nslookup "$DOMAIN" &>/dev/null; then
-    IP=$(nslookup "$DOMAIN" 2>/dev/null | awk '/^Address: / { print $2 }' | head -1)
-    ok "DNS resolvido: ${DOMAIN} → ${IP}"
-else
-    fail "DNS não resolvido para: ${DOMAIN}"
-fi
-
-# ── Resultado final ───────────────────────────────────────────────────────────
+# ── Resultado ─────────────────────────────────────────────────────────────────
 echo ""
-if [[ $ERRORS -eq 0 ]]; then
-    echo -e "${GREEN}${BOLD}  ✅ Sistema saudável — nenhum erro crítico encontrado.${NC}"
+echo -e "${BOLD}${BLUE}══════════════════════════════════════════${NC}"
+if [ "$ERRORS" -eq 0 ]; then
+    echo -e "${GREEN}${BOLD}  ✅ Todos os checks passaram!${NC}"
 else
-    echo -e "${RED}${BOLD}  ❌ ${ERRORS} erro(s) encontrado(s). Verifique os itens acima.${NC}"
+    echo -e "${RED}${BOLD}  ✘ ${ERRORS} check(s) falharam. Revise os itens acima.${NC}"
 fi
-echo ""
+echo -e "${BOLD}${BLUE}══════════════════════════════════════════${NC}\n"
+
+exit $ERRORS
