@@ -2,9 +2,19 @@ version: "3.8"
 
 # =============================================================================
 # VOXEL PACS — docker/docker-compose.yml
-# Serviços: OHIF Viewer
-# Nginx roda via systemd no host (com Certbot)
-# Orthanc roda em servidor remoto — configurado via .env
+#
+# Imagem oficial: ohif/app:latest  (https://hub.docker.com/r/ohif/app)
+# Versão estável atual: v3.12.5
+#
+# ATENÇÃO — Volumes relativos:
+#   Este arquivo está em docker/docker-compose.yml
+#   Os volumes usam ../ para referenciar a raiz do projeto
+#
+# O app-config.js DEVE ser gerado ANTES de subir este Compose:
+#   bash scripts/install-ohif.sh
+#
+# Para subir manualmente:
+#   cd docker && docker compose up -d
 # =============================================================================
 
 networks:
@@ -14,27 +24,33 @@ networks:
 services:
 
   # ---------------------------------------------------------------------------
-  # OHIF Viewer
+  # OHIF Viewer — Imagem oficial ohif/app:latest (v3.12.5)
+  # Documentação: https://docs.ohif.org/deployment/docker
   # ---------------------------------------------------------------------------
   ohif:
     image: ohif/app:latest
     container_name: voxelpacs-ohif
     restart: always
+    env_file:
+      - ../.env
     environment:
       - TZ=${TIMEZONE:-America/Sao_Paulo}
     volumes:
+      # app-config.js gerado por scripts/install-ohif.sh ANTES de subir
       - ../config/ohif/app-config.js:/usr/share/nginx/html/app-config.js:ro
+      # Logo customizado
       - ../config/ohif/logo:/usr/share/nginx/html/assets/logo:ro
     networks:
       - voxelpacs
     ports:
+      # Expõe apenas para localhost — Nginx faz o proxy reverso
       - "127.0.0.1:${OHIF_PORT:-3000}:80"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost/"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 20s
+      start_period: 30s
     logging:
       driver: "json-file"
       options:

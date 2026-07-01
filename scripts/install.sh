@@ -261,11 +261,34 @@ fi
 
 # ── Containers Docker ─────────────────────────────────────────────────────────
 section "Iniciando containers Docker"
-cd docker
+
+# Garantir que o app-config.js existe antes de subir o container
+if [ ! -f "${PROJECT_DIR}/config/ohif/app-config.js" ]; then
+    error "config/ohif/app-config.js não encontrado!
+       O arquivo deve ser gerado antes de subir o Docker Compose.
+       Execute: bash scripts/install-ohif.sh"
+fi
+if ! grep -q "window.config" "${PROJECT_DIR}/config/ohif/app-config.js"; then
+    error "config/ohif/app-config.js parece inválido (sem window.config).
+       Regere o arquivo: bash scripts/install-ohif.sh"
+fi
+ok "app-config.js validado: ${PROJECT_DIR}/config/ohif/app-config.js"
+
+# Subir Compose a partir da pasta docker/ (onde está o docker-compose.yml)
+# Os volumes usam ../ para referenciar a raiz do projeto
+DOCKER_DIR="${PROJECT_DIR}/docker"
+if [ ! -d "$DOCKER_DIR" ]; then
+    error "Pasta docker/ não encontrada em: ${DOCKER_DIR}"
+fi
+if [ ! -f "${DOCKER_DIR}/docker-compose.yml" ]; then
+    error "docker/docker-compose.yml não encontrado em: ${DOCKER_DIR}/docker-compose.yml"
+fi
+
+cd "$DOCKER_DIR"
 $COMPOSE pull
-$COMPOSE up -d --build
+$COMPOSE up -d --build --remove-orphans
 cd "$PROJECT_DIR"
-ok "Containers iniciados."
+ok "Containers iniciados a partir de: ${DOCKER_DIR}"
 
 # ── Aguardar OHIF ─────────────────────────────────────────────────────────────
 section "Validando containers"
