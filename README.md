@@ -1,65 +1,99 @@
-# VOXEL PACS — Deploy Profissional
+# VOXEL PACS DEPLOY
 
-Bem-vindo ao repositório oficial de deploy do **VOXEL PACS**.
+Infraestrutura oficial do VOXEL PACS.
 
-Este repositório é responsável por instalar, atualizar e manter toda a infraestrutura do VOXEL PACS (OHIF Viewer + Nginx + SSL) de forma automatizada, reproduzível e totalmente desacoplada do Orthanc.
+Componentes instalados:
 
-## 🚀 Arquitetura Desacoplada
-
-A arquitetura foi projetada para garantir máxima flexibilidade:
-- **OHIF Viewer:** Roda em containers Docker, servido por um Nginx reverso com SSL Let's Encrypt.
-- **Orthanc:** Fica em outro servidor. O OHIF se conecta a ele via DICOMweb.
-- **Vantagem:** Você pode migrar o Orthanc ou o OHIF para servidores diferentes sem que um afete o outro.
-
-## 📦 Como instalar em 3 minutos
-
-Siga estes passos em um servidor Ubuntu 24.04 limpo:
-
-```bash
-# 1. Clone o repositório
-git clone https://github.com/VOXELPACS/voxelpacs-deploy.git
-cd voxelpacs-deploy
-
-# 2. Configure as variáveis de ambiente
-cp .env.example .env
-nano .env
-
-# 3. Execute o instalador automático
-chmod +x install.sh
-./install.sh
-```
-
-Ao final da instalação, o ambiente estará disponível em: `https://view.seudominio.com.br`
-
-## 📚 Documentação Completa
-
-Para detalhes sobre cada operação, consulte a documentação específica na pasta `docs/`:
-
-- [Instalação (INSTALL.md)](docs/INSTALL.md)
-- [Atualização (UPDATE.md)](docs/UPDATE.md)
-- [Backup e Restauração (BACKUP.md)](docs/BACKUP.md)
-- [Migração de Servidor (MIGRATION.md)](docs/MIGRATION.md)
-- [Certificados SSL (SSL.md)](docs/SSL.md)
-- [Resolução de Problemas (TROUBLESHOOTING.md)](docs/TROUBLESHOOTING.md)
-
-## 🛠 Scripts Disponíveis
-
-| Script | Descrição |
-|--------|-----------|
-| `./install.sh` | Instala Docker, Nginx, baixa imagens e sobe os containers. |
-| `./update.sh` | Atualiza as imagens Docker e o código do OHIF sem downtime. |
-| `./backup.sh` | Faz backup completo de configurações, `.env` e certificados SSL. |
-| `./restore.sh` | Restaura um backup previamente criado. |
-| `./healthcheck.sh` | Verifica a saúde de todo o ambiente (Docker, Nginx, SSL, DNS, Orthanc). |
-
-## 🔮 Integração Futura (Roadmap)
-
-Esta infraestrutura está preparada para integração com:
-- VOXEL B.I.
-- Portal Médico e Portal do Paciente
-- Inteligência Artificial (IA)
-- Visualizador Mobile
-- Autenticação OAuth2 / OpenID / LDAP
+✔ Docker  
+✔ Docker Compose  
+✔ Nginx  
+✔ Let's Encrypt SSL  
+✔ OHIF Viewer  
+✔ Proxy Reverso  
+✔ Integração Orthanc  
+✔ Backup Automático  
+✔ Atualização Automática  
 
 ---
-*Desenvolvido com ❤️ pela equipe VOXEL PACS.*
+
+## Instalação
+
+```bash
+git clone https://github.com/andreprogramadorbh-ai/voxelpacs-deploy.git
+
+cd voxelpacs-deploy
+
+cp .env.example .env
+
+nano .env
+
+bash install.sh
+```
+
+---
+
+## Configuração (.env)
+
+Antes de executar a instalação, configure o arquivo `.env` com os dados do seu ambiente:
+
+| Variável | Descrição | Exemplo |
+|---|---|---|
+| `DOMAIN` | Domínio que aponta para este servidor | `view.voxelpacs.com.br` |
+| `CERTBOT_EMAIL` | E-mail para notificações SSL | `andre@voxelpacs.com.br` |
+| `GENERATE_SSL` | Gerar certificado SSL automaticamente | `yes` |
+| `OHIF_NAME` | Nome exibido no OHIF Viewer | `VOXEL PACS` |
+| `OHIF_PORT` | Porta interna do OHIF | `3000` |
+| `ORTHANC_PROTOCOL` | Protocolo de conexão com o Orthanc | `http` |
+| `ORTHANC_HOST` | IP ou domínio do servidor Orthanc | `46.225.51.122` |
+| `ORTHANC_PORT` | Porta HTTP do Orthanc | `8042` |
+| `ORTHANC_USERNAME` | Usuário do Orthanc | `vivere_admin` |
+| `ORTHANC_PASSWORD` | Senha do Orthanc | `SuaSenha` |
+| `ORTHANC_AET` | AE Title do Orthanc | `ORTHANCPACS` |
+| `TIMEZONE` | Fuso horário do servidor | `America/Sao_Paulo` |
+| `BACKUP_DIR` | Diretório de backups | `./backups` |
+
+---
+
+## Scripts disponíveis
+
+| Script | Descrição |
+|---|---|
+| `bash install.sh` | Instala todo o ambiente do zero |
+| `bash update.sh` | Atualiza imagens Docker sem downtime |
+| `bash backup.sh` | Gera backup de configurações e certificados SSL |
+| `bash restore.sh <arquivo>` | Restaura um backup previamente criado |
+| `bash healthcheck.sh` | Verifica a saúde de todo o ambiente |
+
+---
+
+## Documentação
+
+- [Instalação detalhada](docs/INSTALL.md)
+- [Atualização](docs/UPDATE.md)
+- [Backup e Restauração](docs/BACKUP.md)
+- [Migração de Servidor](docs/MIGRATION.md)
+- [Certificados SSL](docs/SSL.md)
+- [Resolução de Problemas](docs/TROUBLESHOOTING.md)
+
+---
+
+## Arquitetura
+
+```
+Internet
+    │
+    ▼
+[ Nginx + SSL ]  ← Let's Encrypt (porta 443)
+    │
+    ▼
+[ OHIF Viewer ]  ← Container Docker (porta 3000)
+    │
+    ▼
+[ Orthanc PACS ]  ← Servidor remoto (DICOMweb)
+```
+
+O Nginx atua como proxy reverso, terminando o SSL e encaminhando as requisições DICOMweb para o Orthanc remoto, evitando problemas de CORS no navegador.
+
+---
+
+*Desenvolvido pela equipe VOXEL PACS.*

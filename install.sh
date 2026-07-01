@@ -32,10 +32,22 @@ if [ ! -f ".env" ]; then
 fi
 source .env
 
-: "${DOMAIN:?Variável DOMAIN não definida no .env}"
-: "${ORTHANC_HOST:?Variável ORTHANC_HOST não definida no .env}"
-: "${ORTHANC_PROTOCOL:?Variável ORTHANC_PROTOCOL não definida no .env}"
-: "${ORTHANC_PORT:?Variável ORTHANC_PORT não definida no .env}"
+# Validar variáveis obrigatórias
+VARS_OK=true
+for VAR in DOMAIN CERTBOT_EMAIL ORTHANC_HOST ORTHANC_PORT ORTHANC_USERNAME ORTHANC_PASSWORD; do
+    VAL=$(eval echo "\$$VAR")
+    if [ -z "$VAL" ]; then
+        echo -e "${RED}[ERROR]${NC} Variável ${BOLD}${VAR}${NC} não configurada."
+        echo -e "        Edite o arquivo .env e preencha: ${YELLOW}${VAR}=valor${NC}"
+        VARS_OK=false
+    fi
+done
+
+if [ "$VARS_OK" = false ]; then
+    echo ""
+    error "Corrija as variáveis acima no arquivo .env antes de continuar."
+fi
+
 log "Configurações carregadas. Domínio: ${DOMAIN}"
 
 # ── Verificar Ubuntu 24 ───────────────────────────────────────────────────────
