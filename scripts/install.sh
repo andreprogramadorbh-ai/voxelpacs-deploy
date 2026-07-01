@@ -307,24 +307,24 @@ if [[ "${GENERATE_SSL:-yes}" == "yes" ]]; then
     ok "SSL configurado para: ${DOMAIN}"
 fi
 
-# ── Validar serviços ──────────────────────────────────────────────────────────
-section "Validando serviços"
-ORTHANC_URL="${ORTHANC_PROTO}://${ORTHANC_HOST}:${ORTHANC_PORT}"
 
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -u "${ORTHANC_USERNAME}:${ORTHANC_PASSWORD}" "${ORTHANC_URL}/system" --max-time 10 2>/dev/null || echo "000")
-[[ "$HTTP_CODE" == "200" ]] && ok "Orthanc: ${ORTHANC_URL}" || warn "Orthanc HTTP ${HTTP_CODE} — verifique credenciais"
+# ── Healthcheck automático (critério de aceite do deploy) ─────────────────────
+section "Healthcheck — validando stack completa"
+log "Aguardando 10s para os serviços estabilizarem..."
+sleep 10
 
-DICOM_CODE=$(curl -s -o /dev/null -w "%{http_code}" -u "${ORTHANC_USERNAME}:${ORTHANC_PASSWORD}" "${ORTHANC_URL}/dicom-web/studies" --max-time 10 2>/dev/null || echo "000")
-[[ "$DICOM_CODE" == "200" ]] && ok "DICOMweb: OK" || warn "DICOMweb HTTP ${DICOM_CODE} — verifique plugin DICOMweb no Orthanc"
-
-OHIF_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${OHIF_PORT_VAL}" --max-time 10 2>/dev/null || echo "000")
-[[ "$OHIF_CODE" == "200" ]] && ok "OHIF: http://127.0.0.1:${OHIF_PORT_VAL}" || warn "OHIF HTTP ${OHIF_CODE} — verifique: $COMPOSE logs ohif"
-
-HTTPS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://${DOMAIN}" --max-time 15 2>/dev/null || echo "000")
-[[ "$HTTPS_CODE" == "200" ]] && ok "HTTPS: https://${DOMAIN}" || warn "HTTPS HTTP ${HTTPS_CODE} — verifique DNS e SSL"
+# Executa o healthcheck completo em cascata:
+#   Docker → Container OHIF → HTTP localhost:3000
+#   → GET /dicom-web/studies → SSL → Proxy Nginx → Orthanc
+if bash scripts/healthcheck.sh; then
+    HEALTH_EXIT=0
+else
+    HEALTH_EXIT=$?
+fi
 
 # ── Resultado final ───────────────────────────────────────────────────────────
 section "Instalação concluída!"
+ORTHANC_URL="${ORTHANC_PROTOCOL:-http}://${ORTHANC_HOST}:${ORTHANC_PORT}"
 echo -e "${GREEN}${BOLD}"
 echo "  ✅ VOXEL PACS instalado com sucesso!"
 echo "  🌐 OHIF Viewer:    https://${DOMAIN}"
@@ -336,3 +336,6 @@ echo "     bash scripts/update.sh        — atualizar"
 echo "     bash scripts/backup.sh        — backup"
 echo "     bash scripts/rollback.sh      — reverter versão"
 echo -e "${NC}"
+
+# Retorna o exit code do healthcheck para CI/CD
+exit ${HEALTH_EXIT}
