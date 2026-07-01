@@ -1,37 +1,31 @@
 #!/usr/bin/env bash
 # =============================================================================
 # VOXEL PACS — scripts/update-ohif.sh
-# Atualiza apenas o container OHIF sem afetar Nginx ou outras configurações
+# Atualiza apenas o container OHIF sem apagar configurações
 # =============================================================================
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+cd "$PROJECT_DIR"
 
-GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; BLUE='\033[0;34m'; NC='\033[0m'
-log()     { echo -e "${GREEN}[OHIF]${NC} $*"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
-section() { echo -e "\n${BOLD}${BLUE}── $* ──${NC}\n"; }
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
+ok()      { echo -e "${GREEN}  ✔${NC} $*"; }
+section() { echo -e "\n${BOLD}${BLUE}══ $* ══${NC}\n"; }
 
-section "Atualizando OHIF Viewer"
+[ -f ".env" ] && source .env
 
-# Backup preventivo
-bash ./backup.sh
+if command -v docker-compose >/dev/null 2>&1; then COMPOSE="docker-compose"
+elif docker compose version >/dev/null 2>&1; then COMPOSE="docker compose"
+else echo "Docker Compose não encontrado."; exit 1; fi
 
-# Baixar nova imagem OHIF
-log "Baixando nova imagem ohif/app:latest..."
+section "VOXEL PACS — Atualização OHIF"
 docker pull ohif/app:latest
+ok "Imagem OHIF atualizada."
 
-# Restart apenas do container OHIF
-log "Reiniciando container OHIF..."
-docker compose up -d --no-deps --build ohif
+cd docker
+$COMPOSE up -d --no-deps --build ohif
+cd "$PROJECT_DIR"
+ok "Container OHIF reiniciado com nova imagem."
 
-# Aguardar
-sleep 5
-
-# Verificar saúde
-STATUS=$(docker inspect --format='{{.State.Health.Status}}' voxelpacs-ohif 2>/dev/null || echo "unknown")
-if [[ "$STATUS" == "healthy" ]]; then
-    log "OHIF atualizado e saudável!"
-else
-    warn "OHIF status: ${STATUS} — verifique os logs: docker logs voxelpacs-ohif"
-fi
-
-log "OHIF atualizado em $(date '+%d/%m/%Y %H:%M:%S')"
+docker image prune -f --filter "dangling=true" 2>/dev/null || true
+echo -e "\n${GREEN}${BOLD}  ✅ OHIF atualizado!${NC}\n"

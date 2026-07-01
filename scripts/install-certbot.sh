@@ -1,16 +1,10 @@
 #!/usr/bin/env bash
-# =============================================================================
-# VOXEL PACS — scripts/install-certbot.sh
-# Instala apenas o Certbot (sem gerar certificado)
-# Para gerar o certificado, use: ./scripts/generate-ssl.sh
-# =============================================================================
+# VOXEL PACS — Instala Certbot (idempotente)
 set -euo pipefail
-
-GREEN='\033[0;32m'; NC='\033[0m'
-log() { echo -e "${GREEN}[CERTBOT]${NC} $*"; }
-
-log "Instalando Certbot..."
-apt-get update -qq
-apt-get install -y -qq certbot
-log "Certbot instalado: $(certbot --version)"
-log "Para gerar o certificado, execute: ./scripts/generate-ssl.sh"
+if command -v certbot &>/dev/null; then
+    echo "  ✔ Certbot já instalado: $(certbot --version)"
+else
+    apt-get update -qq
+    apt-get install -y -qq certbot python3-certbot-nginx
+    echo "  ✔ Certbot instalado: $(certbot --version)"
+fi

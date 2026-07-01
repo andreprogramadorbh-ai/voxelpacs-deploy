@@ -1,0 +1,20 @@
+{
+  "_comment": "VOXEL PACS — Configuração de referência do OHIF. O app-config.js real é gerado pelo install.sh.",
+  "routerBasename": "/",
+  "showStudyList": true,
+  "servers": {
+    "dicomWeb": [
+      {
+        "name": "VOXEL PACS",
+        "wadoUriRoot": "https://DOMAIN/wado",
+        "qidoRoot": "https://DOMAIN/dicom-web",
+        "wadoRoot": "https://DOMAIN/dicom-web",
+        "qidoSupportsIncludeField": true,
+        "imageRendering": "wadors",
+        "thumbnailRendering": "wadors",
+        "enableStudyLazyLoad": true,
+        "supportsFuzzyMatching": true
+      }
+    ]
+  }
+}
