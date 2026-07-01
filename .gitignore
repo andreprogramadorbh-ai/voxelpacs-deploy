@@ -1,0 +1,33 @@
+# =============================================================================
+# VOXEL PACS — .gitignore
+# =============================================================================
+
+# Variáveis de ambiente (NUNCA versionar)
+.env
+
+# Diretório de backups
+backups/
+
+# Certificados SSL (gerados pelo Certbot no servidor)
+# Os caminhos reais são em /etc/letsencrypt, mas por segurança:
+*.pem
+*.key
+*.crt
+*.csr
+
+# Logs
+*.log
+logs/
+
+# Arquivos temporários do sistema operacional
+.DS_Store
+Thumbs.db
+
+# Dependências Node.js (caso scripts JS sejam adicionados futuramente)
+node_modules/
+
+# Arquivos de IDE
+.idea/
+.vscode/
+*.swp
+*.swo

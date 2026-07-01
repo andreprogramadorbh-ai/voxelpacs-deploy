@@ -1,0 +1,24 @@
+{
+  "Name": "VOXEL PACS Orthanc",
+  "DicomAet": "ORTHANCPACS",
+  "DicomPort": 4242,
+  "HttpPort": 8042,
+  "RemoteAccessAllowed": true,
+  "AuthenticationEnabled": true,
+  "RegisteredUsers": {
+    "admin": "voxelpacs"
+  },
+  "DicomWeb": {
+    "Enable": true,
+    "Root": "/dicom-web/"
+  },
+  "PostgreSQL": {
+    "EnableIndex": true,
+    "EnableStorage": true,
+    "Host": "postgres",
+    "Port": 5432,
+    "Database": "orthanc",
+    "Username": "orthanc",
+    "Password": "orthancpassword"
+  }
+}
