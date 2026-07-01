@@ -3,15 +3,21 @@ version: "3.8"
 # =============================================================================
 # VOXEL PACS — docker/docker-compose.yml
 #
-# Imagem oficial: ohif/app:latest  (https://hub.docker.com/r/ohif/app)
-# Versão estável atual: v3.12.5
+# Imagem oficial: ohif/app:latest
+# Repositório:    https://hub.docker.com/r/ohif/app
+# Documentação:   https://docs.ohif.org/deployment/docker
+# Versão estável: v3.12.5 (latest aponta sempre para a mais recente estável)
 #
-# ATENÇÃO — Volumes relativos:
-#   Este arquivo está em docker/docker-compose.yml
-#   Os volumes usam ../ para referenciar a raiz do projeto
+# ARQUITETURA:
+#   - OHIF Viewer roda no container, exposto APENAS para 127.0.0.1
+#   - Nginx no host faz proxy reverso: https://DOMAIN → http://127.0.0.1:3000
+#   - Orthanc fica em servidor remoto — OHIF acessa via proxy Nginx (/dicom-web, /wado)
+#   - NENHUM IP, porta ou domínio externo é configurado no app-config.js
 #
-# O app-config.js DEVE ser gerado ANTES de subir este Compose:
-#   bash scripts/install-ohif.sh
+# PRÉ-REQUISITO OBRIGATÓRIO:
+#   Execute ANTES de subir este Compose:
+#     bash scripts/install-ohif.sh
+#   Isso gera: config/ohif/app-config.js (montado como volume abaixo)
 #
 # Para subir manualmente:
 #   cd docker && docker compose up -d
@@ -24,8 +30,12 @@ networks:
 services:
 
   # ---------------------------------------------------------------------------
-  # OHIF Viewer — Imagem oficial ohif/app:latest (v3.12.5)
-  # Documentação: https://docs.ohif.org/deployment/docker
+  # OHIF Viewer
+  # Imagem oficial: ohif/app:latest (https://hub.docker.com/r/ohif/app)
+  #
+  # O app-config.js é montado como volume somente leitura.
+  # Ele aponta para /dicom-web e /wado (caminhos relativos via proxy Nginx).
+  # Nenhum IP, porta ou domínio externo é configurado no app-config.js.
   # ---------------------------------------------------------------------------
   ohif:
     image: ohif/app:latest
@@ -36,14 +46,16 @@ services:
     environment:
       - TZ=${TIMEZONE:-America/Sao_Paulo}
     volumes:
-      # app-config.js gerado por scripts/install-ohif.sh ANTES de subir
+      # app-config.js gerado por scripts/install-ohif.sh
+      # Montado sobre o arquivo padrão da imagem
       - ../config/ohif/app-config.js:/usr/share/nginx/html/app-config.js:ro
       # Logo customizado
       - ../config/ohif/logo:/usr/share/nginx/html/assets/logo:ro
     networks:
       - voxelpacs
     ports:
-      # Expõe apenas para localhost — Nginx faz o proxy reverso
+      # Expõe APENAS para localhost — Nginx faz o proxy reverso
+      # Nunca expor diretamente para 0.0.0.0
       - "127.0.0.1:${OHIF_PORT:-3000}:80"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost/"]
