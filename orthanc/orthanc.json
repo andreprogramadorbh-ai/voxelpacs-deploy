@@ -35,7 +35,15 @@
 
   // Timeout de conexões DICOM
   "DicomScuTimeout": 10,
+  // Recebimento universal — aceita qualquer PACS sem cadastro prévio
+  // false = não verifica o AET de destino (funciona com IP, DNS ou qualquer AET)
   "DicomCheckCalledAet": false,
+  // false = não exige que o PACS remetente esteja cadastrado em DicomModalities
+  "DicomCheckCallingAet": false,
+  // true = aceita SOP Classes desconhecidas (equipamentos antigos/proprietários)
+  "UnknownSopClassAccepted": true,
+  // Servidor DICOM explicitamente habilitado
+  "DicomServerEnabled": true,
 
   // Logs
   "LogLevel": "default",
