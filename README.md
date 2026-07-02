@@ -1,78 +1,46 @@
-# VOXEL PACS DEPLOY v1.0
+# VOXEL PACS DEPLOY
 
-Infraestrutura oficial e profissional do **VOXEL PACS**, baseada na arquitetura de microserviços.
+Infraestrutura oficial e limpa do VOXEL PACS (v1.0).
 
-O Orthanc atua exclusivamente como repositório DICOM. Toda a inteligência (tokens, autenticação, integrações) é gerenciada pela **API VOXEL PACS** (sistema PHP 8.1 Multi-Tenant).
+## Componentes
 
-## Arquitetura
+✔ **Docker** — Containers independentes com versões fixas
+✔ **Nginx** — Reverse Proxy com VirtualHosts separados e HTTPS
+✔ **Orthanc** — Servidor DICOM modular com 10 plugins
+✔ **OHIF Viewer** — Versão v3.12.5 com configuração dataSources
+✔ **PostgreSQL** — Banco de dados relacional
+✔ **Storage** — Armazenamento DICOM persistente
 
-- ✔ **API VOXEL PACS** — PHP 8.1 MVC Multi-Tenant (código em `api/`)
-- ✔ **MySQL 8.0** — banco de dados da aplicação
-- ✔ **Orthanc** — servidor DICOM + DICOMweb
-- ✔ **OHIF Viewer v3.12.5** — visualizador DICOM (container independente)
-- ✔ **Nginx** — proxy reverso único (host)
-- ✔ **Let's Encrypt SSL**
-- ✔ **Storage DICOM isolado**
-- ✔ **Configurações Orthanc modulares**
-- ✔ **Migrations automáticas** na primeira inicialização
+## Domínios
 
-Para entender a arquitetura completa, leia o [ARCHITECTURE.md](docs/ARCHITECTURE.md).
+* **Viewer:** `https://view.voxelpacs.com.br`
+* **DICOM:** `https://dicom.voxelpacs.com.br`
 
-## Instalação (Zero Intervenção Manual)
+## Estrutura do Servidor (`/opt/voxelpacs`)
+
+```
+/opt/voxelpacs/
+├── docker/         # docker-compose.yml
+├── nginx/          # VirtualHosts (view.conf, dicom.conf)
+├── ohif/           # app-config.js (OHIF v3) e logo
+├── orthanc/        # Configurações JSON modulares
+├── postgres/       # Banco de dados
+├── storage/dicom/  # Arquivos DICOM (.dcm)
+├── backups/        # Backups automatizados
+├── logs/           # Logs do Nginx
+└── scripts/        # Automação (install, healthcheck, backup)
+```
+
+## Instalação
 
 ```bash
-# 1. Clone o repositório com submódulos
-git clone --recurse-submodules \
-    https://github.com/andreprogramadorbh-ai/voxelpacs-deploy.git \
-    /opt/voxelpacs
+git clone https://github.com/andreprogramadorbh-ai/voxelpacs-deploy.git /opt/voxelpacs
 cd /opt/voxelpacs
-
-# 2. Configure as variáveis de ambiente
-cp .env.example .env
-nano .env
-
-# 3. Execute o instalador
 bash scripts/install.sh
 ```
 
-## Variáveis Obrigatórias (`.env`)
-
-| Variável | Descrição |
-|---|---|
-| `DOMAIN` | Domínio público (`view.voxelpacs.com.br`) |
-| `CERTBOT_EMAIL` | E-mail para avisos de expiração do SSL |
-| `ORTHANC_USERNAME` | Usuário admin do Orthanc |
-| `ORTHANC_PASSWORD` | Senha admin do Orthanc |
-| `DB_DATABASE` | Nome do banco MySQL |
-| `DB_USERNAME` | Usuário do banco MySQL |
-| `DB_PASSWORD` | Senha do banco MySQL |
-| `MYSQL_ROOT_PASSWORD` | Senha root do MySQL |
-| `APP_SECRET` | Chave secreta da aplicação PHP (32+ chars) |
-
-## Scripts Oficiais
-
-| Comando | O que faz |
-|---|---|
-| `bash scripts/install.sh` | Instala a plataforma do zero |
-| `bash scripts/update.sh` | Atualiza sem downtime |
-| `bash scripts/backup.sh` | Backup separado (banco, storage, configs) |
-| `bash scripts/healthcheck.sh` | Valida saúde de todos os componentes |
-
-## Atualizar o Código da API
+## Healthcheck
 
 ```bash
-# Atualizar submódulo para o commit mais recente
-git submodule update --remote api
-git add api && git commit -m "chore: atualiza api para commit mais recente"
-
-# Rebuild e restart do container
-cd docker && docker compose up -d --build voxelpacs-api
+bash scripts/healthcheck.sh
 ```
-
-## Documentação
-
-- [Arquitetura (ARCHITECTURE.md)](docs/ARCHITECTURE.md)
-- [Instalação Detalhada (INSTALL.md)](docs/INSTALL.md)
-- [API VOXEL PACS (api/README.md)](api/README.md)
-- [Backup e Restore (BACKUP.md)](docs/BACKUP.md)
-- [Troubleshooting (TROUBLESHOOTING.md)](docs/TROUBLESHOOTING.md)
