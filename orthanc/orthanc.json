@@ -7,7 +7,7 @@
 
   // Nome do servidor AE Title (DICOM)
   "Name": "VOXELPACS",
-  "AETitle": "ORTHANCPACS",
+  "AETitle": "VOXELSRVPACS",
 
   // Porta DICOM C-STORE (não exposta externamente — apenas interna Docker)
   "DicomPort": 4242,

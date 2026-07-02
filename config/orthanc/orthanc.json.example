@@ -1,6 +1,6 @@
 {
   "Name": "VOXEL PACS Orthanc",
-  "DicomAet": "ORTHANCPACS",
+  "DicomAet": "VOXELSRVPACS",
   "DicomPort": 4242,
   "HttpPort": 8042,
   "RemoteAccessAllowed": true,
