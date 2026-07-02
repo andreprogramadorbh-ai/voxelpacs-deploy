@@ -2,46 +2,45 @@ version: "3.8"
 
 # =============================================================================
 # VOXEL PACS — docker/docker-compose.yml
-# Arquitetura: 5 containers em rede interna isolada
+# Arquitetura: 4 containers + Nginx no host
 #
 #   Internet
 #       │
 #       ▼
 #   nginx (host — não container)
 #       │
-#   ┌───┴──────────────────┐
-#   │                      │
-#   ▼                      ▼
-#  ohif                voxelpacs-api
-#                          │
-#                          ▼
-#                       postgres
-#                          │
-#                          ▼
-#                        orthanc
-#                          │
-#                          ▼
-#                    storage/dicom
+#   ┌───┴──────────────────────┐
+#   │                          │
+#   ▼                          ▼
+#  ohif                 voxelpacs-api (PHP 8.1)
+#                              │
+#                              ▼
+#                           mysql
+#                              │
+#                              ▼
+#                           orthanc
+#                              │
+#                              ▼
+#                       storage/dicom
 #
 # SEGURANÇA:
-#   - Portas 8042 (Orthanc) e 4242 (DICOM) NUNCA expostas externamente
-#   - Portas 3000 (OHIF) e 8080 (API) apenas para 127.0.0.1 (Nginx proxy)
-#   - Postgres apenas na rede interna Docker
+#   - Portas 8042/4242 (Orthanc) NUNCA expostas externamente
+#   - Portas 3000 (OHIF) e 8080 (API) apenas para 127.0.0.1
+#   - MySQL apenas na rede interna Docker
 #
-# VERSÕES FIXAS (não usar latest em produção):
-#   - OHIF:     ohif/app:v3.12.5
-#   - Orthanc:  osimis/orthanc:24.11.3 (com plugins DICOMweb + PostgreSQL)
-#   - Postgres: postgres:16-alpine
-#   - API:      ghcr.io/andreprogramadorbh-ai/voxelpacs-api:latest (placeholder)
+# VERSÕES FIXAS:
+#   - OHIF:    ohif/app:v3.12.5
+#   - Orthanc: osimis/orthanc:24.11.3 (com plugins DICOMweb)
+#   - MySQL:   mysql:8.0
+#   - PHP/API: build local (./api/Dockerfile)
 # =============================================================================
 
 networks:
   voxelpacs:
     driver: bridge
-    internal: false
 
 volumes:
-  postgres_data:
+  mysql_data:
     driver: local
   orthanc_storage:
     driver: local
@@ -49,31 +48,35 @@ volumes:
 services:
 
   # ---------------------------------------------------------------------------
-  # PostgreSQL 16 — banco de dados
-  # Armazena: índices Orthanc + dados da API VOXEL PACS
-  # Os arquivos DICOM ficam em storage/dicom (volume separado)
+  # MySQL 8.0 — banco de dados da API VOXEL PACS
+  # O sistema PHP usa MySQL (conforme .env.example do voxelpacs)
+  # Armazena: dados da aplicação (exames, usuários, tenants, etc.)
   # ---------------------------------------------------------------------------
-  postgres:
-    image: postgres:16-alpine
-    container_name: voxelpacs-postgres
+  mysql:
+    image: mysql:8.0
+    container_name: voxelpacs-mysql
     restart: always
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-voxelpacs}
-      POSTGRES_USER: ${POSTGRES_USER:-voxelpacs}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no .env}
-      PGDATA: /var/lib/postgresql/data/pgdata
+      MYSQL_DATABASE: ${DB_DATABASE:-voxel_pacs}
+      MYSQL_USER: ${DB_USERNAME:-voxelpacs_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Defina DB_PASSWORD no .env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Defina MYSQL_ROOT_PASSWORD no .env}
       TZ: ${TIMEZONE:-America/Sao_Paulo}
     volumes:
-      - ../postgres/data:/var/lib/postgresql/data
+      - ../postgres/data:/var/lib/mysql
+      # Migrations executadas automaticamente na primeira inicialização
+      - ../api/database/migrations:/docker-entrypoint-initdb.d:ro
     networks:
       - voxelpacs
-    # Postgres NÃO expõe porta externamente — apenas rede interna Docker
+    # MySQL NÃO expõe porta externamente — apenas rede interna Docker
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-voxelpacs} -d ${POSTGRES_DB:-voxelpacs}"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost",
+             "-u", "${DB_USERNAME:-voxelpacs_user}",
+             "-p${DB_PASSWORD:-password}"]
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 30s
+      start_period: 60s
     logging:
       driver: "json-file"
       options:
@@ -82,18 +85,14 @@ services:
 
   # ---------------------------------------------------------------------------
   # Orthanc — servidor DICOM + DICOMweb
-  # Imagem: osimis/orthanc (inclui plugins DICOMweb + PostgreSQL)
-  # Armazena: arquivos DICOM em /storage/dicom
-  # Índices: PostgreSQL (não SQLite)
+  # Imagem: osimis/orthanc (inclui plugins DICOMweb)
+  # Armazena: arquivos DICOM em storage/dicom
   # NUNCA exposto externamente — apenas via proxy Nginx (/dicom-web, /wado)
   # ---------------------------------------------------------------------------
   orthanc:
     image: osimis/orthanc:24.11.3
     container_name: voxelpacs-orthanc
     restart: always
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
       TZ: ${TIMEZONE:-America/Sao_Paulo}
     volumes:
@@ -101,17 +100,16 @@ services:
       - ../orthanc/orthanc.json:/etc/orthanc/orthanc.json:ro
       - ../orthanc/credentials.json:/etc/orthanc/credentials.json:ro
       - ../orthanc/dicomweb.json:/etc/orthanc/dicomweb.json:ro
-      - ../orthanc/postgresql.json:/etc/orthanc/postgresql.json:ro
       - ../orthanc/webviewer.json:/etc/orthanc/webviewer.json:ro
       - ../orthanc/worklists.json:/etc/orthanc/worklists.json:ro
-      # Storage DICOM separado do banco (facilita backup e migração)
+      # Storage DICOM separado (facilita backup e migração)
       - ../storage/dicom:/var/lib/orthanc/db
     networks:
       - voxelpacs
     ports:
       # HTTP — apenas localhost (Nginx faz proxy de /dicom-web e /wado)
       - "127.0.0.1:8042:8042"
-      # DICOM C-STORE — apenas localhost (modalidades enviam via rede interna)
+      # DICOM C-STORE — apenas localhost
       - "127.0.0.1:4242:4242"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8042/system"]
@@ -126,9 +124,9 @@ services:
         max-file: "5"
 
   # ---------------------------------------------------------------------------
-  # OHIF Viewer v3.12.5
+  # OHIF Viewer v3.12.5 — visualizador DICOM
   # Versão FIXA — não usar latest em produção
-  # app-config.js usa formato OHIF v3 (dataSources, não servers.dicomWeb)
+  # app-config.js usa formato OHIF v3 (dataSources)
   # Acesso: apenas via Nginx (127.0.0.1:3000)
   # ---------------------------------------------------------------------------
   ohif:
@@ -145,7 +143,6 @@ services:
     networks:
       - voxelpacs
     ports:
-      # Expõe APENAS para localhost — Nginx faz o proxy reverso
       - "127.0.0.1:${OHIF_PORT:-3000}:80"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost/"]
@@ -160,52 +157,70 @@ services:
         max-file: "3"
 
   # ---------------------------------------------------------------------------
-  # API VOXEL PACS — coração do sistema
-  # Responsabilidades: auth, RBAC, tokens, auditoria, RIS, ERP, HL7, IA
-  # O OHIF NUNCA acessa o banco diretamente — tudo passa pela API
-  # Fluxo de token: ERP → POST /api/tokens → GET /open/{token} → OHIF
-  #
-  # PLACEHOLDER: substitua pela imagem real quando disponível
+  # API VOXEL PACS — Sistema PHP 8.1 (build local)
+  # Código-fonte: ../api/ (submódulo git → andreprogramadorbh-ai/voxelpacs)
+  # Responsabilidades: auth, RBAC, tokens, auditoria, RIS, ERP, HL7
+  # Fluxo de token: ERP → POST /open/{token} → API → StudyUID → OHIF
   # ---------------------------------------------------------------------------
   voxelpacs-api:
-    image: ghcr.io/andreprogramadorbh-ai/voxelpacs-api:latest
+    build:
+      context: ../api
+      dockerfile: Dockerfile
+    image: voxelpacs-api:latest
     container_name: voxelpacs-api
     restart: always
     depends_on:
-      postgres:
+      mysql:
         condition: service_healthy
       orthanc:
         condition: service_healthy
     environment:
       TZ: ${TIMEZONE:-America/Sao_Paulo}
-      # Banco de dados
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: ${POSTGRES_DB:-voxelpacs}
-      DB_USER: ${POSTGRES_USER:-voxelpacs}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no .env}
+      # Aplicação
+      APP_NAME: "${OHIF_NAME:-VOXEL PACS}"
+      APP_ENV: ${APP_ENV:-production}
+      APP_URL: "https://${DOMAIN}"
+      APP_DEBUG: "false"
+      APP_SECRET: ${APP_SECRET:?Defina APP_SECRET no .env}
+      SESSION_TIMEOUT: "3600"
+      # Banco de dados MySQL (rede interna Docker)
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_DATABASE: ${DB_DATABASE:-voxel_pacs}
+      DB_USERNAME: ${DB_USERNAME:-voxelpacs_user}
+      DB_PASSWORD: ${DB_PASSWORD:?Defina DB_PASSWORD no .env}
       # Orthanc (rede interna Docker)
       ORTHANC_URL: http://orthanc:8042
-      ORTHANC_USERNAME: ${ORTHANC_USERNAME}
-      ORTHANC_PASSWORD: ${ORTHANC_PASSWORD}
-      # Domínio público
-      APP_DOMAIN: https://${DOMAIN}
-      # Segurança
-      JWT_SECRET: ${JWT_SECRET:-ChangeMe_GenerateWithOpenSSL}
-      APP_ENV: ${APP_ENV:-production}
+      ORTHANC_USER: ${ORTHANC_USERNAME}
+      ORTHANC_PASS: ${ORTHANC_PASSWORD}
+      ORTHANC_AE_TITLE: ${ORTHANC_AET:-ORTHANCPACS}
+      ORTHANC_DICOM_PORT: "4242"
+      # OHIF Viewer
+      DICOM_VIEWER_URL: "https://${DOMAIN}"
+      # Storage
+      STORAGE_PATH: /var/www/html/storage
+      UPLOAD_MAX_SIZE: "50M"
+      # E-mail
+      MAIL_HOST: ${MAIL_HOST:-smtp.gmail.com}
+      MAIL_PORT: ${MAIL_PORT:-587}
+      MAIL_USERNAME: ${MAIL_USERNAME:-}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-noreply@voxelpacs.com.br}
+      MAIL_FROM_NAME: "VOXEL PACS"
     volumes:
-      - ../api:/app/config:ro
+      # Storage persistente (uploads, logs)
+      - ../storage/uploads:/var/www/html/storage/uploads
     networks:
       - voxelpacs
     ports:
       # Expõe APENAS para localhost — Nginx faz o proxy reverso
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${API_PORT:-8080}:80"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost/health"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 30s
+      start_period: 60s
     logging:
       driver: "json-file"
       options:
