@@ -1,36 +1,31 @@
 /**
  * VOXEL PACS — OHIF Viewer v3 — Configuração de Produção
  * =========================================================
- * Servidor DICOM : https://dicom.voxelpacs.com.br  (Nginx → Orthanc)
+ * Servidor DICOM : https://view.voxelpacs.com.br/dicom-web  (Nginx → Orthanc)
  * Viewer         : https://view.voxelpacs.com.br
  * ERP            : https://server.voxelpacs.com.br
  *
- * Autenticação: o Nginx em dicom.voxelpacs.com.br injeta o header
- * "Authorization: Basic ..." via proxy_set_header antes de encaminhar
- * ao Orthanc. O OHIF NÃO deve enviar credenciais — o browser bloquearia
- * o header Authorization em requisições CORS cross-origin.
+ * Autenticação: o Nginx em view.voxelpacs.com.br injeta o header
+ * Authorization: Basic ... via proxy_set_header antes de encaminhar ao Orthanc.
+ * O OHIF NÃO deve enviar credenciais — o browser bloquearia o header
+ * Authorization em requisições CORS cross-origin (causa da tela preta).
  *
- * Cornerstone3D: habilitado via @ohif/extension-cornerstone (padrão no OHIF v3)
- * para renderização volumétrica MPR/3D de séries CT/MR.
+ * Cornerstone3D: habilitado via @ohif/extension-cornerstone (padrão OHIF v3)
+ * extensions e modes vazios = OHIF carrega todos os defaults incluindo Cornerstone3D.
  */
 window.config = {
-  // ── Roteamento ─────────────────────────────────────────────────────────────
   routerBasename: '/',
 
-  // ── Extensions e Modes: vazios = OHIF carrega os defaults ──────────────────
-  // Inclui automaticamente: @ohif/extension-cornerstone (Cornerstone3D),
-  // @ohif/extension-measurement-tracking, @ohif/extension-dicom-seg, etc.
+  // extensions e modes VAZIOS = OHIF carrega os defaults (inclui Cornerstone3D)
+  // NÃO preencher — evita o erro appConfig.extensions is not iterable
   extensions: [],
   modes: [],
 
-  // ── Fonte de dados padrão ──────────────────────────────────────────────────
   defaultDataSourceName: 'voxelpacs',
 
-  // ── Banner "uso experimental" ──────────────────────────────────────────────
-  // 'never' = nunca exibe o aviso de uso experimental
+  // Remove o banner de uso experimental
   investigationalUseDialog: { option: 'never' },
 
-  // ── Configurações gerais ───────────────────────────────────────────────────
   showStudyList: true,
   maxNumberOfWebWorkers: 4,
   showLoadingIndicator: true,
@@ -46,7 +41,6 @@ window.config = {
     prefetch: 25,
   },
 
-  // ── Data Source: DICOMweb → Nginx → Orthanc ────────────────────────────────
   dataSources: [
     {
       namespace: '@ohif/extension-default.dataSourcesModule.dicomweb',
@@ -55,16 +49,16 @@ window.config = {
         friendlyName: 'VOXEL PACS',
         name: 'voxelpacs',
 
-        // Endpoints DICOMweb via Nginx (sem credenciais — Nginx injeta auth)
-        qidoRoot:    'https://dicom.voxelpacs.com.br/dicom-web',
-        wadoRoot:    'https://dicom.voxelpacs.com.br/dicom-web',
-        wadoUriRoot: 'https://dicom.voxelpacs.com.br/wado',
+        // DICOMweb via Nginx proxy em view.voxelpacs.com.br
+        // O Nginx injeta proxy_set_header Authorization automaticamente
+        // NÃO enviar requestOptions.auth — o browser bloqueia Authorization em CORS
+        qidoRoot:    'https://view.voxelpacs.com.br/dicom-web',
+        wadoRoot:    'https://view.voxelpacs.com.br/dicom-web',
+        wadoUriRoot: 'https://view.voxelpacs.com.br/wado',
 
-        // SEM requestOptions.auth — o Nginx proxy já autentica com o Orthanc
-        // Enviar credentials do browser causaria conflito de header e bloqueio CORS
+        // SEM auth — Nginx injeta a autenticação via proxy_set_header
         requestOptions: {},
 
-        // Otimizações de performance
         enableStudyLazyLoad: true,
         qidoSupportsIncludeField: true,
         supportsReject: false,
@@ -74,7 +68,6 @@ window.config = {
         thumbnailRendering: 'wadors',
         omitQuotationForMultipartRequest: true,
 
-        // BulkData URI para carregamento eficiente de pixel data
         bulkDataURI: {
           enabled: true,
           relativeResolution: 'series',
@@ -83,7 +76,6 @@ window.config = {
     },
   ],
 
-  // ── White Labeling: Branding VOXEL PACS ────────────────────────────────────
   whiteLabeling: {
     createLogoComponentFn: function (React) {
       return React.createElement(
@@ -112,7 +104,7 @@ window.config = {
               fontWeight: '700',
               fontSize: '16px',
               letterSpacing: '0.5px',
-              fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+              fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif',
             },
           },
           'VOXEL PACS'
@@ -121,7 +113,6 @@ window.config = {
     },
   },
 
-  // ── Customization Service ──────────────────────────────────────────────────
   customizationService: [
     {
       'ohif.appTitle': { value: 'VOXEL PACS — Viewer DICOM' },
