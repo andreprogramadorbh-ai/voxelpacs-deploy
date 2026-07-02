@@ -1,23 +1,18 @@
 /**
  * VOXEL PACS — OHIF Viewer v3 — Configuração de Produção
  * =========================================================
- * Servidor DICOM : https://view.voxelpacs.com.br/dicom-web  (Nginx → Orthanc)
- * Viewer         : https://view.voxelpacs.com.br
- * ERP            : https://server.voxelpacs.com.br
+ * Arquitetura:
+ *   view.voxelpacs.com.br  → OHIF SPA (container Docker porta 3000)
+ *   dicom.voxelpacs.com.br → Orthanc DICOMweb (Nginx injeta Authorization Basic)
  *
- * Autenticação: o Nginx em view.voxelpacs.com.br injeta o header
- * Authorization: Basic ... via proxy_set_header antes de encaminhar ao Orthanc.
- * O OHIF NÃO deve enviar credenciais — o browser bloquearia o header
- * Authorization em requisições CORS cross-origin (causa da tela preta).
- *
- * Cornerstone3D: habilitado via @ohif/extension-cornerstone (padrão OHIF v3)
- * extensions e modes vazios = OHIF carrega todos os defaults incluindo Cornerstone3D.
+ * CORS: dicom.conf permite Access-Control-Allow-Origin: view.voxelpacs.com.br
+ * Auth: Nginx injeta proxy_set_header Authorization automaticamente
+ *       O OHIF NÃO envia credenciais (browser bloquearia em CORS cross-origin)
  */
 window.config = {
   routerBasename: '/',
 
   // extensions e modes VAZIOS = OHIF carrega os defaults (inclui Cornerstone3D)
-  // NÃO preencher — evita o erro appConfig.extensions is not iterable
   extensions: [],
   modes: [],
 
@@ -49,14 +44,14 @@ window.config = {
         friendlyName: 'VOXEL PACS',
         name: 'voxelpacs',
 
-        // DICOMweb via Nginx proxy em view.voxelpacs.com.br
-        // O Nginx injeta proxy_set_header Authorization automaticamente
-        // NÃO enviar requestOptions.auth — o browser bloqueia Authorization em CORS
-        qidoRoot:    'https://view.voxelpacs.com.br/dicom-web',
-        wadoRoot:    'https://view.voxelpacs.com.br/dicom-web',
-        wadoUriRoot: 'https://view.voxelpacs.com.br/wado',
+        // DICOMweb via dicom.voxelpacs.com.br (Nginx → Orthanc)
+        // O Nginx injeta Authorization Basic automaticamente
+        // O OHIF NÃO envia auth — browser bloquearia em CORS cross-origin
+        qidoRoot:    'https://dicom.voxelpacs.com.br/dicom-web',
+        wadoRoot:    'https://dicom.voxelpacs.com.br/dicom-web',
+        wadoUriRoot: 'https://dicom.voxelpacs.com.br/wado',
 
-        // SEM auth — Nginx injeta a autenticação via proxy_set_header
+        // SEM auth — Nginx injeta via proxy_set_header Authorization
         requestOptions: {},
 
         enableStudyLazyLoad: true,
