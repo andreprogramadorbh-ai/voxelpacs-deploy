@@ -2,52 +2,146 @@ version: "3.8"
 
 # =============================================================================
 # VOXEL PACS — docker/docker-compose.yml
+# Arquitetura: 5 containers em rede interna isolada
 #
-# Imagem:       ohif/app:v3.12.5  (versão FIXA — não usar latest em produção)
-# Repositório:  https://hub.docker.com/r/ohif/app
-# Docs:         https://docs.ohif.org/deployment/docker
+#   Internet
+#       │
+#       ▼
+#   nginx (host — não container)
+#       │
+#   ┌───┴──────────────────┐
+#   │                      │
+#   ▼                      ▼
+#  ohif                voxelpacs-api
+#                          │
+#                          ▼
+#                       postgres
+#                          │
+#                          ▼
+#                        orthanc
+#                          │
+#                          ▼
+#                    storage/dicom
 #
-# VERSÃO FIXA: Para atualizar o OHIF, altere a tag abaixo, atualize o
-# app-config.js conforme a nova versão e teste antes de publicar.
-# Nunca use `latest` em produção — cada atualização pode quebrar a config.
+# SEGURANÇA:
+#   - Portas 8042 (Orthanc) e 4242 (DICOM) NUNCA expostas externamente
+#   - Portas 3000 (OHIF) e 8080 (API) apenas para 127.0.0.1 (Nginx proxy)
+#   - Postgres apenas na rede interna Docker
 #
-# ARQUITETURA:
-#   - OHIF roda no container, exposto APENAS para 127.0.0.1:3000
-#   - Nginx no host faz proxy reverso: https://view.voxelpacs.com.br → OHIF
-#   - Orthanc fica em servidor remoto — Nginx faz proxy de /dicom-web e /wado
-#   - O app-config.js usa URLs absolutas: https://view.voxelpacs.com.br/dicom-web
-#
-# PRÉ-REQUISITO:
-#   Execute ANTES de subir:  bash scripts/install-ohif.sh
-#   Isso gera: config/ohif/app-config.js (montado como volume abaixo)
-#
-# Para subir manualmente:
-#   cd docker && docker compose up -d
+# VERSÕES FIXAS (não usar latest em produção):
+#   - OHIF:     ohif/app:v3.12.5
+#   - Orthanc:  osimis/orthanc:24.11.3 (com plugins DICOMweb + PostgreSQL)
+#   - Postgres: postgres:16-alpine
+#   - API:      ghcr.io/andreprogramadorbh-ai/voxelpacs-api:latest (placeholder)
 # =============================================================================
 
 networks:
   voxelpacs:
     driver: bridge
+    internal: false
+
+volumes:
+  postgres_data:
+    driver: local
+  orthanc_storage:
+    driver: local
 
 services:
 
   # ---------------------------------------------------------------------------
+  # PostgreSQL 16 — banco de dados
+  # Armazena: índices Orthanc + dados da API VOXEL PACS
+  # Os arquivos DICOM ficam em storage/dicom (volume separado)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: voxelpacs-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-voxelpacs}
+      POSTGRES_USER: ${POSTGRES_USER:-voxelpacs}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no .env}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      TZ: ${TIMEZONE:-America/Sao_Paulo}
+    volumes:
+      - ../postgres/data:/var/lib/postgresql/data
+    networks:
+      - voxelpacs
+    # Postgres NÃO expõe porta externamente — apenas rede interna Docker
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-voxelpacs} -d ${POSTGRES_DB:-voxelpacs}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Orthanc — servidor DICOM + DICOMweb
+  # Imagem: osimis/orthanc (inclui plugins DICOMweb + PostgreSQL)
+  # Armazena: arquivos DICOM em /storage/dicom
+  # Índices: PostgreSQL (não SQLite)
+  # NUNCA exposto externamente — apenas via proxy Nginx (/dicom-web, /wado)
+  # ---------------------------------------------------------------------------
+  orthanc:
+    image: osimis/orthanc:24.11.3
+    container_name: voxelpacs-orthanc
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TZ: ${TIMEZONE:-America/Sao_Paulo}
+    volumes:
+      # Configurações modulares do Orthanc
+      - ../orthanc/orthanc.json:/etc/orthanc/orthanc.json:ro
+      - ../orthanc/credentials.json:/etc/orthanc/credentials.json:ro
+      - ../orthanc/dicomweb.json:/etc/orthanc/dicomweb.json:ro
+      - ../orthanc/postgresql.json:/etc/orthanc/postgresql.json:ro
+      - ../orthanc/webviewer.json:/etc/orthanc/webviewer.json:ro
+      - ../orthanc/worklists.json:/etc/orthanc/worklists.json:ro
+      # Storage DICOM separado do banco (facilita backup e migração)
+      - ../storage/dicom:/var/lib/orthanc/db
+    networks:
+      - voxelpacs
+    ports:
+      # HTTP — apenas localhost (Nginx faz proxy de /dicom-web e /wado)
+      - "127.0.0.1:8042:8042"
+      # DICOM C-STORE — apenas localhost (modalidades enviam via rede interna)
+      - "127.0.0.1:4242:4242"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8042/system"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
   # OHIF Viewer v3.12.5
-  # Imagem fixa: ohif/app:v3.12.5
+  # Versão FIXA — não usar latest em produção
   # app-config.js usa formato OHIF v3 (dataSources, não servers.dicomWeb)
+  # Acesso: apenas via Nginx (127.0.0.1:3000)
   # ---------------------------------------------------------------------------
   ohif:
     image: ohif/app:v3.12.5
     container_name: voxelpacs-ohif
     restart: always
     environment:
-      - TZ=${TIMEZONE:-America/Sao_Paulo}
+      TZ: ${TIMEZONE:-America/Sao_Paulo}
     volumes:
-      # app-config.js gerado por scripts/install-ohif.sh
-      # Formato OHIF v3: dataSources (NÃO servers.dicomWeb da v2)
-      - ../config/ohif/app-config.js:/usr/share/nginx/html/app-config.js:ro
+      # app-config.js gerado por scripts/install-ohif.sh (formato OHIF v3)
+      - ../ohif/app-config.js:/usr/share/nginx/html/app-config.js:ro
       # Logo VOXEL PACS
-      - ../config/ohif/logo:/usr/share/nginx/html/assets/logo:ro
+      - ../ohif/logo:/usr/share/nginx/html/assets/logo:ro
     networks:
       - voxelpacs
     ports:
@@ -64,3 +158,56 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # API VOXEL PACS — coração do sistema
+  # Responsabilidades: auth, RBAC, tokens, auditoria, RIS, ERP, HL7, IA
+  # O OHIF NUNCA acessa o banco diretamente — tudo passa pela API
+  # Fluxo de token: ERP → POST /api/tokens → GET /open/{token} → OHIF
+  #
+  # PLACEHOLDER: substitua pela imagem real quando disponível
+  # ---------------------------------------------------------------------------
+  voxelpacs-api:
+    image: ghcr.io/andreprogramadorbh-ai/voxelpacs-api:latest
+    container_name: voxelpacs-api
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      orthanc:
+        condition: service_healthy
+    environment:
+      TZ: ${TIMEZONE:-America/Sao_Paulo}
+      # Banco de dados
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-voxelpacs}
+      DB_USER: ${POSTGRES_USER:-voxelpacs}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no .env}
+      # Orthanc (rede interna Docker)
+      ORTHANC_URL: http://orthanc:8042
+      ORTHANC_USERNAME: ${ORTHANC_USERNAME}
+      ORTHANC_PASSWORD: ${ORTHANC_PASSWORD}
+      # Domínio público
+      APP_DOMAIN: https://${DOMAIN}
+      # Segurança
+      JWT_SECRET: ${JWT_SECRET:-ChangeMe_GenerateWithOpenSSL}
+      APP_ENV: ${APP_ENV:-production}
+    volumes:
+      - ../api:/app/config:ro
+    networks:
+      - voxelpacs
+    ports:
+      # Expõe APENAS para localhost — Nginx faz o proxy reverso
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"

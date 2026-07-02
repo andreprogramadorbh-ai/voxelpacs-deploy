@@ -1,105 +1,63 @@
-# VOXEL PACS DEPLOY
+# VOXEL PACS DEPLOY v1.0
 
-Infraestrutura oficial de deploy profissional do **VOXEL PACS**.
+Infraestrutura oficial e profissional do **VOXEL PACS**, baseada na arquitetura de microserviços.
 
-Este repositório automatiza a instalação, configuração e manutenção do ambiente PACS, compatível com Ubuntu 24.04 e versões V1 e V2 do Docker Compose.
+O Orthanc agora atua exclusivamente como repositório DICOM, enquanto toda a inteligência (tokens, autenticação, integrações) é gerenciada pela **API VOXEL PACS**.
 
-### Componentes instalados:
+## 🏗️ Arquitetura
 
-✔ Docker  
-✔ Docker Compose  
-✔ Nginx  
-✔ Let's Encrypt SSL  
-✔ OHIF Viewer  
-✔ Proxy Reverso  
-✔ Integração Orthanc  
-✔ Backup Automático  
-✔ Atualização Automática  
+- ✔ **API VOXEL PACS** (Coração do sistema)
+- ✔ **PostgreSQL 16** (Índices e Metadados)
+- ✔ **Orthanc** (Storage e DICOMweb)
+- ✔ **OHIF Viewer v3** (Container independente)
+- ✔ **Nginx** (Proxy Reverso Único)
+- ✔ **Let's Encrypt SSL**
+- ✔ **Storage Isolado**
+- ✔ **Configurações Modulares**
 
----
+Para entender a arquitetura completa, leia o [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Instalação em 1 minuto
+## 🚀 Instalação (Zero Intervenção Manual)
 
-O deploy foi projetado para funcionar **sem necessidade de editar nenhum arquivo de código ou configuração manualmente**. Tudo é gerado a partir do `.env`.
-
-Execute em um servidor Ubuntu limpo:
+O deploy é 100% automatizado e reproduzível.
 
 ```bash
-git clone https://github.com/andreprogramadorbh-ai/voxelpacs-deploy.git
+# 1. Clone o repositório no diretório base (ex: /opt/voxelpacs)
+git clone https://github.com/andreprogramadorbh-ai/voxelpacs-deploy.git /opt/voxelpacs
+cd /opt/voxelpacs
 
-cd voxelpacs-deploy
-
+# 2. Configure as variáveis de ambiente
 cp .env.example .env
-
 nano .env
 
-bash install.sh
+# 3. Execute o instalador
+bash scripts/install.sh
 ```
 
----
+## ⚙️ Variáveis Obrigatórias (`.env`)
 
-## Configuração (.env)
-
-Antes de rodar o `install.sh`, você deve preencher o arquivo `.env`. As seguintes variáveis são obrigatórias:
-
-| Variável | Descrição | Exemplo |
-|---|---|---|
-| `DOMAIN` | Domínio apontado para o servidor | `view.voxelpacs.com.br` |
-| `CERTBOT_EMAIL` | E-mail para renovação do SSL | `andre@voxelpacs.com.br` |
-| `ORTHANC_HOST` | IP/Domínio do servidor Orthanc | `46.225.51.122` |
-| `ORTHANC_PORT` | Porta HTTP do Orthanc | `8042` |
-| `ORTHANC_USERNAME` | Usuário do Orthanc | `vivere_admin` |
-| `ORTHANC_PASSWORD` | Senha do Orthanc | `SuaSenhaForte` |
-
-Outras variáveis opcionais (com valores padrão) já vêm configuradas no `.env.example`.
-
----
-
-## Scripts Disponíveis
-
-Todos os scripts detectam automaticamente o seu sistema operacional e a versão do Docker Compose instalada.
-
-| Comando | O que faz? |
+| Variável | Descrição |
 |---|---|
-| `bash install.sh` | Instala Docker, Nginx, OHIF, gera configurações e sobe o ambiente. |
-| `bash deploy.sh` | Alias para `install.sh`. |
-| `bash update.sh` | Atualiza o código via Git, baixa novas imagens e reinicia sem downtime. |
-| `bash rollback.sh` | Reverte o código para o commit anterior e reinicia os containers. |
-| `bash healthcheck.sh` | Valida Docker, containers, Nginx, OHIF, Orthanc, DICOMweb e validade do SSL. |
-| `bash backup.sh` | Gera um arquivo compactado com as configurações, `.env` e certificados. |
-| `bash restore.sh <arquivo>`| Restaura um backup gerado anteriormente. |
+| `DOMAIN` | Domínio público (ex: `view.voxelpacs.com.br`) |
+| `CERTBOT_EMAIL` | E-mail para avisos de expiração do SSL |
+| `ORTHANC_USERNAME` | Usuário admin do Orthanc |
+| `ORTHANC_PASSWORD` | Senha admin do Orthanc |
+| `POSTGRES_DB` | Nome do banco de dados |
+| `POSTGRES_USER` | Usuário do banco de dados |
+| `POSTGRES_PASSWORD` | Senha do banco de dados |
 
----
+## 🛠️ Scripts Oficiais
 
-## Arquitetura
+| Comando | O que faz |
+|---|---|
+| `bash scripts/install.sh` | Instala a plataforma do zero, gera SSL e sobe containers |
+| `bash scripts/update.sh` | Atualiza imagens e código sem downtime |
+| `bash scripts/backup.sh` | Gera backup separado (banco, storage, configs) |
+| `bash scripts/healthcheck.sh`| Valida a saúde de todos os componentes (cascata) |
 
-O sistema utiliza o Nginx como proxy reverso para evitar problemas de CORS no navegador ao se comunicar com o Orthanc remoto.
+## 📚 Documentação
 
-```
-Internet (Navegador do Médico)
-    │
-    ▼
-[ Nginx + SSL Let's Encrypt ]  ← Porta 443
-    │
-    ├──► /           → [ OHIF Viewer ] (Container Docker - Porta 3000)
-    │
-    └──► /dicom-web/ → [ Orthanc PACS ] (Servidor Remoto via DICOMweb)
-```
-
-O arquivo `app-config.js` do OHIF e as configurações do Nginx são **gerados dinamicamente** pelo `install.sh` com base nas variáveis do `.env`, eliminando a necessidade de configurar IPs fixos manualmente.
-
----
-
-## Documentação Completa
-
-Para cenários avançados, consulte a documentação detalhada na pasta `docs/`:
-
-- [Instalação Detalhada](docs/INSTALL.md)
-- [Atualização (Update)](docs/UPDATE.md)
-- [Backup e Restauração](docs/BACKUP.md)
-- [Migração de Servidor](docs/MIGRATION.md)
-- [Gerenciamento de SSL](docs/SSL.md)
-- [Resolução de Problemas (Troubleshooting)](docs/TROUBLESHOOTING.md)
-
----
-*Desenvolvido pela equipe VOXEL PACS.*
+- [Arquitetura (ARCHITECTURE.md)](docs/ARCHITECTURE.md)
+- [Instalação Detalhada (INSTALL.md)](docs/INSTALL.md)
+- [Backup e Restore (BACKUP.md)](docs/BACKUP.md)
+- [Troubleshooting (TROUBLESHOOTING.md)](docs/TROUBLESHOOTING.md)

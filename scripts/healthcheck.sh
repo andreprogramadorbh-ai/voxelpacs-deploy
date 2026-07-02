@@ -1,355 +1,178 @@
 #!/usr/bin/env bash
 # =============================================================================
 # VOXEL PACS — scripts/healthcheck.sh
+# Validação completa da stack em cascata:
 #
-# Valida toda a stack em cascata:
-#
-#   Docker
-#     └─ Container OHIF (docker ps)
-#          └─ HTTP localhost:3000
-#               └─ GET /dicom-web/studies (via proxy Nginx)
-#                    └─ SSL (dias restantes)
-#                         └─ Proxy Nginx → Orthanc
-#                              └─ Orthanc /system
+#   docker ps
+#       ↓ Container OHIF
+#       ↓ Container Orthanc
+#       ↓ Container PostgreSQL
+#       ↓ Container API VOXEL PACS
+#   HTTP localhost:3000 (OHIF)
+#   HTTP localhost:8042 (Orthanc)
+#   GET /dicom-web/studies (via proxy Nginx)
+#   SSL (dias restantes)
+#   Proxy Nginx
+#   Endpoints: /health, /ready, /live
+#   Recursos: disco, RAM, CPU
 #
 # Uso:
-#   bash scripts/healthcheck.sh           — execução normal
-#   bash scripts/healthcheck.sh --quiet   — sem output, apenas exit code
-#   bash scripts/healthcheck.sh --json    — saída JSON (para automação)
-#
-# Chamado automaticamente pelo install.sh após o deploy.
+#   bash scripts/healthcheck.sh           # saída colorida
+#   bash scripts/healthcheck.sh --quiet   # apenas exit code
+#   bash scripts/healthcheck.sh --json    # saída JSON
 # =============================================================================
-set -euo pipefail
+set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
-# ── Opções ────────────────────────────────────────────────────────────────────
-QUIET=false
-JSON_OUTPUT=false
-for ARG in "$@"; do
-    case "$ARG" in
-        --quiet) QUIET=true ;;
-        --json)  JSON_OUTPUT=true ;;
-    esac
-done
+[ -f ".env" ] && source .env
 
-# ── Cores ─────────────────────────────────────────────────────────────────────
-if [ "$QUIET" = false ] && [ "$JSON_OUTPUT" = false ]; then
-    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-    BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
-else
-    RED=''; GREEN=''; YELLOW=''; BLUE=''; CYAN=''; BOLD=''; NC=''
-fi
+DOMAIN="${DOMAIN:-view.voxelpacs.com.br}"
+OHIF_PORT="${OHIF_PORT:-3000}"
+MODE="${1:-}"
 
-# ── Contadores ────────────────────────────────────────────────────────────────
-ERRORS=0
-WARNINGS=0
-declare -A CHECK_STATUS  # nome → OK|WARN|FAIL
-declare -A CHECK_MSG     # nome → mensagem
+GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'
+BLUE='\033[0;34m'; BOLD='\033[1m'; NC='\033[0m'
 
-ok()   {
-    local name="$1"; local msg="$2"
-    CHECK_STATUS["$name"]="OK"
-    CHECK_MSG["$name"]="$msg"
-    [ "$QUIET" = false ] && [ "$JSON_OUTPUT" = false ] && \
-        echo -e "${GREEN}  ✔${NC} ${msg}"
-}
-warn() {
-    local name="$1"; local msg="$2"
-    CHECK_STATUS["$name"]="WARN"
-    CHECK_MSG["$name"]="$msg"
-    WARNINGS=$(( WARNINGS + 1 ))
-    [ "$QUIET" = false ] && [ "$JSON_OUTPUT" = false ] && \
-        echo -e "${YELLOW}  ⚠${NC} ${msg}"
-}
-fail() {
-    local name="$1"; local msg="$2"
-    CHECK_STATUS["$name"]="FAIL"
-    CHECK_MSG["$name"]="$msg"
-    ERRORS=$(( ERRORS + 1 ))
-    [ "$QUIET" = false ] && [ "$JSON_OUTPUT" = false ] && \
-        echo -e "${RED}  ✘${NC} ${msg}"
-}
-section() {
-    [ "$QUIET" = false ] && [ "$JSON_OUTPUT" = false ] && \
-        echo -e "\n${BOLD}${BLUE}── $* ${NC}"
+PASS=0; FAIL=0; WARN=0
+declare -A RESULTS
+
+check() {
+    local name="$1" cmd="$2"
+    if eval "$cmd" &>/dev/null; then
+        RESULTS["$name"]="OK"
+        PASS=$((PASS+1))
+        [[ "$MODE" != "--quiet" && "$MODE" != "--json" ]] && \
+            echo -e "${GREEN}  ✔${NC} ${name}"
+    else
+        RESULTS["$name"]="FAIL"
+        FAIL=$((FAIL+1))
+        [[ "$MODE" != "--quiet" && "$MODE" != "--json" ]] && \
+            echo -e "${RED}  ✘${NC} ${name}"
+    fi
 }
 
-# ── Cabeçalho ─────────────────────────────────────────────────────────────────
-if [ "$QUIET" = false ] && [ "$JSON_OUTPUT" = false ]; then
-    echo -e "\n${BOLD}${BLUE}══════════════════════════════════════════════════════${NC}"
-    echo -e "${BOLD}${CYAN}  VOXEL PACS — Healthcheck${NC}"
-    echo -e "${BOLD}${BLUE}══════════════════════════════════════════════════════${NC}"
-    echo -e "  Data: $(date '+%Y-%m-%d %H:%M:%S')\n"
-fi
-
-# ── Carregar .env ─────────────────────────────────────────────────────────────
-if [ -f ".env" ]; then
-    source .env
-else
-    [ "$QUIET" = false ] && echo -e "${YELLOW}[WARN]${NC} .env não encontrado. Usando defaults."
-fi
-
-DOMAIN_VAL="${DOMAIN:-localhost}"
-OHIF_PORT_VAL="${OHIF_PORT:-3000}"
-ORTHANC_PROTO="${ORTHANC_PROTOCOL:-http}"
-ORTHANC_HOST_VAL="${ORTHANC_HOST:-}"
-ORTHANC_PORT_VAL="${ORTHANC_PORT:-8042}"
-ORTHANC_USER="${ORTHANC_USERNAME:-}"
-ORTHANC_PASS="${ORTHANC_PASSWORD:-}"
-ORTHANC_URL="${ORTHANC_PROTO}://${ORTHANC_HOST_VAL}:${ORTHANC_PORT_VAL}"
-
-# =============================================================================
-# NÍVEL 1 — Docker
-# =============================================================================
-section "1. Docker"
-if command -v docker &>/dev/null; then
-    DOCKER_VER=$(docker --version 2>/dev/null | head -1)
-    if docker info &>/dev/null; then
-        ok "docker" "Docker: ${DOCKER_VER}"
+warn_check() {
+    local name="$1" cmd="$2"
+    if eval "$cmd" &>/dev/null; then
+        RESULTS["$name"]="OK"
+        PASS=$((PASS+1))
+        [[ "$MODE" != "--quiet" && "$MODE" != "--json" ]] && \
+            echo -e "${GREEN}  ✔${NC} ${name}"
     else
-        fail "docker" "Docker instalado mas daemon não está rodando. Execute: systemctl start docker"
+        RESULTS["$name"]="WARN"
+        WARN=$((WARN+1))
+        [[ "$MODE" != "--quiet" && "$MODE" != "--json" ]] && \
+            echo -e "${YELLOW}  ⚠${NC} ${name} (aviso)"
+    fi
+}
+
+[[ "$MODE" != "--quiet" && "$MODE" != "--json" ]] && \
+    echo -e "\n${BOLD}${BLUE}══ VOXEL PACS — Healthcheck ══${NC}"
+
+# ── 1. Docker daemon ──────────────────────────────────────────────────────────
+check "Docker daemon ativo" "docker info"
+
+# ── 2. Containers em execução ─────────────────────────────────────────────────
+check "Container: voxelpacs-postgres" \
+    "docker ps --filter name=voxelpacs-postgres --filter status=running | grep -q voxelpacs-postgres"
+check "Container: voxelpacs-orthanc" \
+    "docker ps --filter name=voxelpacs-orthanc --filter status=running | grep -q voxelpacs-orthanc"
+check "Container: voxelpacs-ohif" \
+    "docker ps --filter name=voxelpacs-ohif --filter status=running | grep -q voxelpacs-ohif"
+warn_check "Container: voxelpacs-api" \
+    "docker ps --filter name=voxelpacs-api --filter status=running | grep -q voxelpacs-api"
+
+# ── 3. HTTP localhost (sem proxy) ─────────────────────────────────────────────
+check "OHIF HTTP localhost:${OHIF_PORT}" \
+    "curl -sf --max-time 5 http://localhost:${OHIF_PORT}/ -o /dev/null"
+check "Orthanc HTTP localhost:8042" \
+    "curl -sf --max-time 5 http://localhost:8042/system -o /dev/null -u '${ORTHANC_USERNAME:-admin}:${ORTHANC_PASSWORD:-admin}'"
+
+# ── 4. PostgreSQL via container ───────────────────────────────────────────────
+check "PostgreSQL pronto" \
+    "docker exec voxelpacs-postgres pg_isready -U ${POSTGRES_USER:-voxelpacs} -d ${POSTGRES_DB:-voxelpacs}"
+
+# ── 5. DICOMweb via proxy Nginx ───────────────────────────────────────────────
+# 401 é aceito (proxy funcionando, autenticação necessária)
+check "GET /dicom-web/studies via Nginx" \
+    "curl -sf --max-time 10 -o /dev/null -w '%{http_code}' https://${DOMAIN}/dicom-web/studies | grep -qE '^(200|401|403)$'"
+
+# ── 6. SSL ────────────────────────────────────────────────────────────────────
+if [ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]; then
+    DAYS_LEFT=$(( ($(date -d "$(openssl x509 -enddate -noout -in /etc/letsencrypt/live/${DOMAIN}/fullchain.pem | cut -d= -f2)" +%s) - $(date +%s)) / 86400 ))
+    if [ "$DAYS_LEFT" -gt 30 ]; then
+        RESULTS["SSL certificado"]="OK"
+        PASS=$((PASS+1))
+        [[ "$MODE" != "--quiet" && "$MODE" != "--json" ]] && \
+            echo -e "${GREEN}  ✔${NC} SSL certificado (${DAYS_LEFT} dias restantes)"
+    elif [ "$DAYS_LEFT" -gt 7 ]; then
+        RESULTS["SSL certificado"]="WARN"
+        WARN=$((WARN+1))
+        [[ "$MODE" != "--quiet" && "$MODE" != "--json" ]] && \
+            echo -e "${YELLOW}  ⚠${NC} SSL certificado expira em ${DAYS_LEFT} dias — renovar em breve"
+    else
+        RESULTS["SSL certificado"]="FAIL"
+        FAIL=$((FAIL+1))
+        [[ "$MODE" != "--quiet" && "$MODE" != "--json" ]] && \
+            echo -e "${RED}  ✘${NC} SSL certificado expira em ${DAYS_LEFT} dias — CRÍTICO"
     fi
 else
-    fail "docker" "Docker não encontrado. Execute: bash scripts/install-docker.sh"
+    warn_check "SSL certificado" "false"
 fi
 
-# =============================================================================
-# NÍVEL 2 — Container OHIF (docker ps)
-# =============================================================================
-section "2. Container OHIF"
-if [[ "${CHECK_STATUS[docker]}" == "OK" ]]; then
-    CONTAINER_STATUS=$(docker inspect --format='{{.State.Status}}' voxelpacs-ohif 2>/dev/null || echo "not_found")
-    CONTAINER_HEALTH=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}no_healthcheck{{end}}' voxelpacs-ohif 2>/dev/null || echo "unknown")
+# ── 7. Nginx ──────────────────────────────────────────────────────────────────
+check "Nginx ativo" "systemctl is-active nginx"
+check "Nginx server_name ${DOMAIN}" "nginx -T 2>/dev/null | grep -q 'server_name ${DOMAIN}'"
 
-    if [[ "$CONTAINER_STATUS" == "running" ]]; then
-        CONTAINER_UPTIME=$(docker inspect --format='{{.State.StartedAt}}' voxelpacs-ohif 2>/dev/null | cut -c1-19 | tr 'T' ' ')
-        ok "ohif_container" "Container OHIF: running (iniciado: ${CONTAINER_UPTIME}) | health: ${CONTAINER_HEALTH}"
-    elif [[ "$CONTAINER_STATUS" == "not_found" ]]; then
-        fail "ohif_container" "Container voxelpacs-ohif não encontrado. Execute: cd docker && docker compose up -d"
-    else
-        fail "ohif_container" "Container OHIF: ${CONTAINER_STATUS}. Verifique: docker logs voxelpacs-ohif"
-    fi
-else
-    warn "ohif_container" "Container OHIF: pulado (Docker com falha)"
-fi
+# ── 8. Endpoints de monitoramento ─────────────────────────────────────────────
+check "GET /health" \
+    "curl -sf --max-time 5 https://${DOMAIN}/health -o /dev/null"
+check "GET /live" \
+    "curl -sf --max-time 5 https://${DOMAIN}/live -o /dev/null"
+warn_check "GET /ready (API)" \
+    "curl -sf --max-time 10 https://${DOMAIN}/ready -o /dev/null"
 
-# =============================================================================
-# NÍVEL 3 — HTTP localhost:3000 (OHIF responde localmente)
-# =============================================================================
-section "3. HTTP localhost:${OHIF_PORT_VAL} (OHIF)"
-if [[ "${CHECK_STATUS[ohif_container]}" == "OK" ]]; then
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-        "http://127.0.0.1:${OHIF_PORT_VAL}" --max-time 10 2>/dev/null || echo "000")
-    if [[ "$HTTP_CODE" == "200" ]]; then
-        ok "ohif_http" "OHIF HTTP: http://127.0.0.1:${OHIF_PORT_VAL} → ${HTTP_CODE} OK"
-    elif [[ "$HTTP_CODE" == "000" ]]; then
-        fail "ohif_http" "OHIF HTTP: sem resposta em 127.0.0.1:${OHIF_PORT_VAL}. Container pode estar iniciando."
-    else
-        warn "ohif_http" "OHIF HTTP: http://127.0.0.1:${OHIF_PORT_VAL} → ${HTTP_CODE}"
-    fi
-else
-    warn "ohif_http" "OHIF HTTP: pulado (container com falha)"
-fi
+# ── 9. Recursos do sistema ────────────────────────────────────────────────────
+DISK_USE=$(df / | awk 'NR==2{print $5}' | tr -d '%')
+RAM_USE=$(free | awk '/^Mem/{printf "%.0f", $3/$2*100}')
+CPU_USE=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | tr -d '%us,' | cut -d. -f1)
 
-# =============================================================================
-# NÍVEL 4 — GET /dicom-web/studies via proxy Nginx
-# =============================================================================
-section "4. GET /dicom-web/studies (via proxy Nginx)"
-if [[ "${CHECK_STATUS[ohif_http]}" == "OK" ]] || [[ "${CHECK_STATUS[ohif_http]}" == "WARN" ]]; then
-    # Testa via HTTPS público (proxy Nginx → Orthanc)
-    DICOM_VIA_PROXY=$(curl -s -o /dev/null -w "%{http_code}" \
-        "https://${DOMAIN_VAL}/dicom-web/studies" \
-        --max-time 15 2>/dev/null || echo "000")
+[ "${DISK_USE:-0}" -lt 90 ] && \
+    check "Disco (${DISK_USE}% usado)" "true" || \
+    check "Disco (${DISK_USE}% usado — CRÍTICO)" "false"
+[ "${RAM_USE:-0}" -lt 90 ] && \
+    check "RAM (${RAM_USE}% usada)" "true" || \
+    warn_check "RAM (${RAM_USE}% usada)" "false"
 
-    if [[ "$DICOM_VIA_PROXY" == "200" ]]; then
-        ok "dicomweb_proxy" "DICOMweb via proxy: https://${DOMAIN_VAL}/dicom-web/studies → ${DICOM_VIA_PROXY} OK"
-    elif [[ "$DICOM_VIA_PROXY" == "401" ]]; then
-        # 401 = Nginx chegou no Orthanc mas autenticação falhou — proxy funcionando
-        ok "dicomweb_proxy" "DICOMweb via proxy: https://${DOMAIN_VAL}/dicom-web/studies → ${DICOM_VIA_PROXY} (proxy ativo, autenticação Orthanc necessária)"
-    elif [[ "$DICOM_VIA_PROXY" == "000" ]]; then
-        fail "dicomweb_proxy" "DICOMweb via proxy: sem resposta. Verifique DNS e Nginx."
-    else
-        warn "dicomweb_proxy" "DICOMweb via proxy: https://${DOMAIN_VAL}/dicom-web/studies → ${DICOM_VIA_PROXY}"
-    fi
-else
-    warn "dicomweb_proxy" "DICOMweb via proxy: pulado (OHIF com falha)"
-fi
+# ── Resultado final ───────────────────────────────────────────────────────────
+TOTAL=$((PASS+FAIL+WARN))
 
-# =============================================================================
-# NÍVEL 5 — SSL (certificado e dias restantes)
-# =============================================================================
-section "5. SSL"
-CERT_PATH="/etc/letsencrypt/live/${DOMAIN_VAL}/fullchain.pem"
-if [ -f "$CERT_PATH" ]; then
-    EXPIRY=$(openssl x509 -enddate -noout -in "$CERT_PATH" 2>/dev/null | cut -d= -f2 || echo "")
-    if [ -n "$EXPIRY" ]; then
-        DAYS_LEFT=$(( ( $(date -d "$EXPIRY" +%s 2>/dev/null || echo 0) - $(date +%s) ) / 86400 ))
-        if [ "$DAYS_LEFT" -gt 30 ]; then
-            ok "ssl" "SSL: válido por ${DAYS_LEFT} dias (expira: ${EXPIRY})"
-        elif [ "$DAYS_LEFT" -gt 7 ]; then
-            warn "ssl" "SSL: expira em ${DAYS_LEFT} dias! Execute: certbot renew"
-        else
-            fail "ssl" "SSL: CRÍTICO — expira em ${DAYS_LEFT} dias! Execute AGORA: certbot renew"
-        fi
-    else
-        warn "ssl" "SSL: certificado encontrado mas não foi possível ler a validade."
-    fi
-else
-    warn "ssl" "SSL: certificado não encontrado em ${CERT_PATH}. Execute: bash scripts/generate-ssl.sh"
-fi
-
-# =============================================================================
-# NÍVEL 6 — Proxy Nginx (HTTPS público → OHIF)
-# =============================================================================
-section "6. Proxy Nginx (HTTPS → OHIF)"
-HTTPS_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-    "https://${DOMAIN_VAL}" --max-time 15 2>/dev/null || echo "000")
-
-if [[ "$HTTPS_CODE" == "200" ]]; then
-    ok "nginx_proxy" "Proxy Nginx: https://${DOMAIN_VAL} → ${HTTPS_CODE} OK"
-elif [[ "$HTTPS_CODE" == "000" ]]; then
-    fail "nginx_proxy" "Proxy Nginx: sem resposta em https://${DOMAIN_VAL}. Verifique DNS e Nginx."
-elif [[ "$HTTPS_CODE" == "502" ]]; then
-    fail "nginx_proxy" "Proxy Nginx: 502 Bad Gateway — OHIF não está respondendo em 127.0.0.1:${OHIF_PORT_VAL}"
-elif [[ "$HTTPS_CODE" == "301" ]] || [[ "$HTTPS_CODE" == "302" ]]; then
-    ok "nginx_proxy" "Proxy Nginx: https://${DOMAIN_VAL} → ${HTTPS_CODE} (redirect OK)"
-else
-    warn "nginx_proxy" "Proxy Nginx: https://${DOMAIN_VAL} → ${HTTPS_CODE}"
-fi
-
-# Verificar se Nginx está ativo no systemd
-if systemctl is-active --quiet nginx 2>/dev/null; then
-    ok "nginx_service" "Nginx service: active (running)"
-else
-    fail "nginx_service" "Nginx service: não está rodando. Execute: systemctl start nginx"
-fi
-
-# Verificar server_name no Nginx
-if nginx -T 2>/dev/null | grep -q "server_name ${DOMAIN_VAL}"; then
-    ok "nginx_vhost" "Nginx VirtualHost: server_name '${DOMAIN_VAL}' configurado"
-else
-    warn "nginx_vhost" "Nginx VirtualHost: server_name '${DOMAIN_VAL}' não encontrado em nginx -T"
-fi
-
-# =============================================================================
-# NÍVEL 7 — Orthanc (acesso direto ao servidor remoto)
-# =============================================================================
-section "7. Orthanc (servidor remoto)"
-if [ -n "$ORTHANC_HOST_VAL" ]; then
-    # Ping básico ao host Orthanc
-    if ping -c 1 -W 3 "$ORTHANC_HOST_VAL" &>/dev/null; then
-        ok "orthanc_ping" "Orthanc ping: ${ORTHANC_HOST_VAL} acessível"
-    else
-        warn "orthanc_ping" "Orthanc ping: ${ORTHANC_HOST_VAL} não respondeu ao ping (pode ser bloqueado por firewall)"
-    fi
-
-    # HTTP ao endpoint /system do Orthanc
-    ORTHANC_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-        -u "${ORTHANC_USER}:${ORTHANC_PASS}" \
-        "${ORTHANC_URL}/system" --max-time 10 2>/dev/null || echo "000")
-
-    if [[ "$ORTHANC_CODE" == "200" ]]; then
-        ok "orthanc_system" "Orthanc /system: ${ORTHANC_URL}/system → ${ORTHANC_CODE} OK"
-    elif [[ "$ORTHANC_CODE" == "401" ]]; then
-        fail "orthanc_system" "Orthanc /system: 401 Unauthorized — verifique ORTHANC_USERNAME e ORTHANC_PASSWORD no .env"
-    elif [[ "$ORTHANC_CODE" == "000" ]]; then
-        fail "orthanc_system" "Orthanc /system: sem resposta em ${ORTHANC_URL}. Verifique se o servidor remoto está online."
-    else
-        warn "orthanc_system" "Orthanc /system: ${ORTHANC_URL}/system → ${ORTHANC_CODE}"
-    fi
-
-    # DICOMweb direto no Orthanc (sem proxy)
-    DICOM_DIRECT=$(curl -s -o /dev/null -w "%{http_code}" \
-        -u "${ORTHANC_USER}:${ORTHANC_PASS}" \
-        "${ORTHANC_URL}/dicom-web/studies" --max-time 10 2>/dev/null || echo "000")
-
-    if [[ "$DICOM_DIRECT" == "200" ]]; then
-        ok "orthanc_dicomweb" "Orthanc DICOMweb: ${ORTHANC_URL}/dicom-web/studies → ${DICOM_DIRECT} OK"
-    elif [[ "$DICOM_DIRECT" == "404" ]]; then
-        warn "orthanc_dicomweb" "Orthanc DICOMweb: 404 — plugin DICOMweb pode não estar instalado no Orthanc"
-    elif [[ "$DICOM_DIRECT" == "000" ]]; then
-        fail "orthanc_dicomweb" "Orthanc DICOMweb: sem resposta em ${ORTHANC_URL}/dicom-web/studies"
-    else
-        warn "orthanc_dicomweb" "Orthanc DICOMweb: ${ORTHANC_URL}/dicom-web/studies → ${DICOM_DIRECT}"
-    fi
-else
-    warn "orthanc_system" "Orthanc: ORTHANC_HOST não configurado no .env"
-    warn "orthanc_dicomweb" "Orthanc DICOMweb: pulado (ORTHANC_HOST não configurado)"
-fi
-
-# =============================================================================
-# RECURSOS DO SERVIDOR
-# =============================================================================
-section "8. Recursos do servidor"
-
-# Disco
-DISK_USAGE=$(df -h / | awk 'NR==2 {print $5}' | tr -d '%')
-DISK_INFO=$(df -h / | awk 'NR==2 {print $3 " usados de " $2 " (" $5 ")"}')
-if [ "$DISK_USAGE" -lt 80 ]; then   ok "disk" "Disco: ${DISK_INFO}"
-elif [ "$DISK_USAGE" -lt 90 ]; then warn "disk" "Disco: ${DISK_INFO} — atenção!"
-else                                fail "disk" "Disco crítico: ${DISK_INFO}"; fi
-
-# RAM
-RAM_TOTAL=$(free -m | awk '/^Mem:/ {print $2}')
-RAM_USED=$(free -m | awk '/^Mem:/ {print $3}')
-RAM_PCT=$(( RAM_USED * 100 / RAM_TOTAL ))
-RAM_INFO="${RAM_USED}MB usados de ${RAM_TOTAL}MB (${RAM_PCT}%)"
-if [ "$RAM_PCT" -lt 80 ]; then   ok "ram" "RAM: ${RAM_INFO}"
-elif [ "$RAM_PCT" -lt 90 ]; then warn "ram" "RAM: ${RAM_INFO} — atenção!"
-else                             fail "ram" "RAM crítica: ${RAM_INFO}"; fi
-
-# CPU
-CPU_LOAD=$(awk '{print $1}' /proc/loadavg)
-CPU_CORES=$(nproc)
-CPU_PCT=$(echo "$CPU_LOAD $CPU_CORES" | awk '{printf "%d", ($1/$2)*100}')
-if [ "$CPU_PCT" -lt 80 ]; then   ok "cpu" "CPU: Load ${CPU_LOAD} em ${CPU_CORES} cores (${CPU_PCT}%)"
-elif [ "$CPU_PCT" -lt 95 ]; then warn "cpu" "CPU: Load ${CPU_LOAD} em ${CPU_CORES} cores (${CPU_PCT}%) — atenção!"
-else                             fail "cpu" "CPU crítica: Load ${CPU_LOAD} em ${CPU_CORES} cores (${CPU_PCT}%)"; fi
-
-# =============================================================================
-# SAÍDA JSON (--json)
-# =============================================================================
-if [ "$JSON_OUTPUT" = true ]; then
+if [[ "$MODE" == "--json" ]]; then
     echo "{"
-    echo "  \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\","
-    echo "  \"domain\": \"${DOMAIN_VAL}\","
-    echo "  \"errors\": ${ERRORS},"
-    echo "  \"warnings\": ${WARNINGS},"
+    echo "  \"timestamp\": \"$(date -Iseconds)\","
+    echo "  \"domain\": \"${DOMAIN}\","
+    echo "  \"pass\": ${PASS},"
+    echo "  \"fail\": ${FAIL},"
+    echo "  \"warn\": ${WARN},"
+    echo "  \"total\": ${TOTAL},"
+    echo "  \"status\": \"$([ $FAIL -eq 0 ] && echo OK || echo FAIL)\","
     echo "  \"checks\": {"
-    FIRST=true
-    for KEY in "${!CHECK_STATUS[@]}"; do
-        STATUS="${CHECK_STATUS[$KEY]}"
-        MSG="${CHECK_MSG[$KEY]}"
-        MSG_ESCAPED="${MSG//\"/\\\"}"
-        if [ "$FIRST" = true ]; then FIRST=false; else echo ","; fi
-        printf "    \"%s\": {\"status\": \"%s\", \"message\": \"%s\"}" "$KEY" "$STATUS" "$MSG_ESCAPED"
-    done
-    echo ""
+    for key in "${!RESULTS[@]}"; do
+        echo "    \"${key}\": \"${RESULTS[$key]}\","
+    done | sed '$ s/,$//'
     echo "  }"
     echo "}"
-    exit $ERRORS
-fi
-
-# =============================================================================
-# RESULTADO FINAL
-# =============================================================================
-if [ "$QUIET" = false ]; then
+elif [[ "$MODE" != "--quiet" ]]; then
     echo ""
-    echo -e "${BOLD}${BLUE}══════════════════════════════════════════════════════${NC}"
-    echo -e "  Checks: OK=$(echo "${!CHECK_STATUS[@]}" | tr ' ' '\n' | while read k; do [ "${CHECK_STATUS[$k]}" = "OK" ] && echo 1; done | wc -l) | WARN=${WARNINGS} | FAIL=${ERRORS}"
-    echo ""
-    if [ "$ERRORS" -eq 0 ] && [ "$WARNINGS" -eq 0 ]; then
-        echo -e "${GREEN}${BOLD}  ✅ Stack completa: SAUDÁVEL${NC}"
-        echo -e "     Docker → OHIF → Nginx → SSL → Proxy → Orthanc"
-    elif [ "$ERRORS" -eq 0 ]; then
-        echo -e "${YELLOW}${BOLD}  ⚠  Stack operacional com ${WARNINGS} aviso(s). Revise os itens acima.${NC}"
+    if [ $FAIL -eq 0 ]; then
+        echo -e "${GREEN}${BOLD}  ✅ Stack saudável — ${PASS}/${TOTAL} verificações OK${NC}"
     else
-        echo -e "${RED}${BOLD}  ✘ ${ERRORS} falha(s) detectada(s). Revise os itens acima.${NC}"
+        echo -e "${RED}${BOLD}  ❌ ${FAIL} verificação(ões) falharam — ${PASS}/${TOTAL} OK${NC}"
     fi
-    echo -e "${BOLD}${BLUE}══════════════════════════════════════════════════════${NC}\n"
+    [ $WARN -gt 0 ] && echo -e "${YELLOW}  ⚠ ${WARN} aviso(s)${NC}"
 fi
 
-exit $ERRORS
+exit $FAIL

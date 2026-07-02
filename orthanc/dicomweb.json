@@ -1,0 +1,31 @@
+{
+  // ==========================================================================
+  // VOXEL PACS — orthanc/dicomweb.json
+  // Plugin DICOMweb do Orthanc
+  // Documentação: https://book.orthanc-server.com/plugins/dicomweb.html
+  // ==========================================================================
+  "DicomWeb": {
+    "Enable": true,
+
+    // Prefixo das rotas DICOMweb
+    "Root": "/dicom-web/",
+
+    // WADO-URI (compatibilidade com viewers antigos)
+    "EnableWado": true,
+    "WadoRoot": "/wado",
+
+    // Metadados em formato JSON (mais eficiente que XML)
+    "MetadataWorkerThreadsCount": 4,
+
+    // SSL — desabilitado (Nginx cuida do SSL)
+    "Ssl": false,
+
+    // Host público (usado para gerar URLs absolutas nos metadados)
+    // Será substituído pelo install.sh com o valor de DOMAIN
+    "Host": "DOMAIN_PLACEHOLDER",
+
+    // Permite acesso sem autenticação ao DICOMweb
+    // (a autenticação é feita pelo Nginx com Basic Auth)
+    "PublicRoot": "/dicom-web/"
+  }
+}

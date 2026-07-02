@@ -1,0 +1,56 @@
+{
+  // ==========================================================================
+  // VOXEL PACS — orthanc/orthanc.json
+  // Configuração principal do Orthanc
+  // Documentação: https://book.orthanc-server.com/users/configuration.html
+  // ==========================================================================
+
+  // Nome do servidor AE Title (DICOM)
+  "Name": "VOXELPACS",
+  "AETitle": "ORTHANCPACS",
+
+  // Porta DICOM C-STORE (não exposta externamente — apenas interna Docker)
+  "DicomPort": 4242,
+
+  // Porta HTTP (não exposta externamente — apenas interna Docker)
+  "HttpPort": 8042,
+
+  // Aceitar conexões de qualquer origem interna (Docker network)
+  "RemoteAccessAllowed": true,
+  "AuthenticationEnabled": true,
+
+  // Plugins habilitados (carregados via volumes Docker)
+  "Plugins": [
+    "/usr/share/orthanc/plugins"
+  ],
+
+  // Armazenamento DICOM (volume Docker → /storage/dicom no host)
+  "StorageDirectory": "/var/lib/orthanc/db",
+
+  // Compressão de storage (zlib reduz ~30% do espaço)
+  "StorageCompression": false,
+
+  // Máximo de conexões simultâneas
+  "HttpThreadsCount": 50,
+
+  // Timeout de conexões DICOM
+  "DicomScuTimeout": 10,
+  "DicomCheckCalledAet": false,
+
+  // Logs
+  "LogLevel": "default",
+
+  // Configurações de segurança HTTP
+  "HttpsCACertificates": "",
+  "SslEnabled": false,
+
+  // Incluir configurações modulares (cada arquivo tem uma responsabilidade)
+  // credentials.json  — usuários e senhas
+  // dicomweb.json     — plugin DICOMweb
+  // postgresql.json   — banco de dados PostgreSQL
+  // webviewer.json    — OHIF Viewer integration
+  // worklists.json    — DICOM Worklists
+  "Worklists": {
+    "Enable": false
+  }
+}

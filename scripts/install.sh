@@ -1,13 +1,26 @@
 #!/usr/bin/env bash
 # =============================================================================
 # VOXEL PACS — scripts/install.sh
-# Instalação completa: Docker, Nginx, OHIF, SSL, Proxy Orthanc
-# Ubuntu 24.04 | Docker Compose V1 e V2 | Idempotente
+# Instalação completa da plataforma VOXEL PACS v1.0
 #
-# REGRA NGINX:
-#   - NUNCA sobrescreve /etc/nginx/nginx.conf
-#   - VirtualHost criado em /etc/nginx/sites-available/voxelpacs.conf
-#   - Ativado via symlink em /etc/nginx/sites-enabled/
+# Arquitetura:
+#   Internet → Nginx → OHIF + API VOXEL PACS → PostgreSQL + Orthanc → Storage DICOM
+#
+# Containers Docker:
+#   postgres        — banco de dados (índices Orthanc + dados API)
+#   orthanc         — servidor DICOM + DICOMweb (osimis/orthanc:24.11.3)
+#   ohif            — visualizador DICOM (ohif/app:v3.12.5)
+#   voxelpacs-api   — API REST (auth, tokens, RBAC, auditoria)
+#
+# Nginx no host:
+#   Proxy reverso para todos os containers
+#   SSL via Let's Encrypt
+#   Rotas: /, /dicom-web/, /wado, /api/, /open/{token}
+#   Endpoints: /health, /ready, /live
+#
+# Uso:
+#   bash scripts/install.sh
+#   (ou: bash deploy.sh)
 # =============================================================================
 set -euo pipefail
 
@@ -15,319 +28,185 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
+# ── Cores e funções de output ─────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
-log()     { echo -e "${GREEN}[VOXEL]${NC} $*"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
+BLUE='\033[0;34m'; BOLD='\033[1m'; NC='\033[0m'
 ok()      { echo -e "${GREEN}  ✔${NC} $*"; }
-section() {
-    echo -e "\n${BOLD}${BLUE}══════════════════════════════════════════${NC}"
-    echo -e "${BOLD}${CYAN}  $*${NC}"
-    echo -e "${BOLD}${BLUE}══════════════════════════════════════════${NC}\n"
-}
+warn()    { echo -e "${YELLOW}  ⚠${NC} $*"; }
+error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
+log()     { echo -e "${BLUE}  →${NC} $*"; }
+section() { echo -e "\n${BOLD}${BLUE}══ $* ══${NC}"; }
 
-echo -e "${BOLD}${BLUE}"
-cat << 'BANNER'
- __   ______  _  __ _____ _       ____  ___   ____ ____
- \ \ / / __ \| |/ /| ____| |     |  _ \|   \ / ___/ ___|
-  \ V /| |  | | ' / |  _| | |     | |_) | |\ | |   \___ \
-   \_/ | |__| | . \ | |___| |___  |  __/| | \| |___ ___) |
-        \____/|_|\_\|_____|_____| |_|   |_|  |\____|____/
-BANNER
-echo -e "${NC}${BOLD}  Deploy Profissional — OHIF Viewer + Nginx + SSL${NC}\n"
+# ── Verificar root ────────────────────────────────────────────────────────────
+[[ $EUID -ne 0 ]] && error "Execute como root: sudo bash scripts/install.sh"
 
-# ── Verificar .env ────────────────────────────────────────────────────────────
-section "Verificando configurações"
+# ── Carregar .env ─────────────────────────────────────────────────────────────
+section "Carregando configuração"
 [ -f ".env" ] || error ".env não encontrado. Execute: cp .env.example .env && nano .env"
 source .env
+ok ".env carregado"
 
-VARS_OK=true
-for VAR in DOMAIN CERTBOT_EMAIL ORTHANC_HOST ORTHANC_PORT ORTHANC_USERNAME ORTHANC_PASSWORD; do
-    VAL=$(eval echo "\$$VAR")
+# ── Validar variáveis obrigatórias ────────────────────────────────────────────
+section "Validando configuração"
+ERRORS=0
+for VAR in DOMAIN CERTBOT_EMAIL ORTHANC_USERNAME ORTHANC_PASSWORD \
+           POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD; do
+    VAL=$(eval echo "\${${VAR}:-}")
     if [ -z "$VAL" ]; then
         echo -e "${RED}[ERROR]${NC} Variável ${BOLD}${VAR}${NC} não configurada."
-        echo -e "        Edite o arquivo .env e preencha: ${YELLOW}${VAR}=valor${NC}"
-        VARS_OK=false
+        echo "        Edite o arquivo .env e preencha: ${VAR}=valor"
+        ERRORS=$((ERRORS + 1))
     fi
 done
-[ "$VARS_OK" = false ] && { echo ""; error "Corrija as variáveis acima no .env antes de continuar."; }
-ok "Configurações carregadas. Domínio: ${DOMAIN}"
+[ $ERRORS -gt 0 ] && error "Corrija as ${ERRORS} variável(is) acima no .env antes de continuar."
+ok "Todas as variáveis obrigatórias configuradas"
 
-# ── Detectar SO ───────────────────────────────────────────────────────────────
-section "Detectando sistema operacional"
-OS_ID=$(grep '^ID=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "unknown")
-OS_VERSION=$(grep '^VERSION_ID=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "0")
-ok "Sistema: ${OS_ID} ${OS_VERSION}"
-if [[ "$OS_ID" != "ubuntu" ]]; then
-    warn "Sistema não é Ubuntu. Compatibilidade não garantida."
-    read -rp "Continuar mesmo assim? (s/N): " CONFIRM
-    [[ "$CONFIRM" =~ ^[sS]$ ]] || error "Instalação cancelada."
-fi
+# ── Criar diretórios necessários ──────────────────────────────────────────────
+section "Criando estrutura de diretórios"
+mkdir -p \
+    orthanc \
+    nginx \
+    ohif/logo \
+    postgres/data \
+    storage/dicom \
+    api \
+    backups \
+    logs
+ok "Estrutura de diretórios criada em: ${PROJECT_DIR}"
 
-# ── Docker ────────────────────────────────────────────────────────────────────
+# ── Instalar Docker ───────────────────────────────────────────────────────────
 section "Verificando Docker"
-if command -v docker &>/dev/null; then
-    ok "Docker já instalado: $(docker --version)"
-else
-    log "Docker não encontrado. Instalando..."
+if ! command -v docker &>/dev/null; then
+    log "Instalando Docker..."
     bash scripts/install-docker.sh
-    ok "Docker instalado: $(docker --version)"
+    ok "Docker instalado"
+else
+    ok "Docker já instalado: $(docker --version)"
 fi
 
-# ── Docker Compose ────────────────────────────────────────────────────────────
-section "Detectando Docker Compose"
-if command -v docker-compose >/dev/null 2>&1; then
+# Detectar Docker Compose V1 ou V2
+if docker compose version &>/dev/null 2>&1; then
+    COMPOSE="docker compose"
+    ok "Docker Compose V2: $(docker compose version --short)"
+elif command -v docker-compose &>/dev/null; then
     COMPOSE="docker-compose"
     ok "Docker Compose V1: $(docker-compose --version)"
-elif docker compose version >/dev/null 2>&1; then
+else
+    log "Instalando Docker Compose plugin..."
+    apt-get install -y docker-compose-plugin 2>/dev/null || \
+        pip3 install docker-compose 2>/dev/null || \
+        error "Não foi possível instalar Docker Compose"
     COMPOSE="docker compose"
-    ok "Docker Compose V2: $(docker compose version)"
+fi
+
+# ── Instalar Nginx ────────────────────────────────────────────────────────────
+section "Verificando Nginx"
+if ! command -v nginx &>/dev/null; then
+    log "Instalando Nginx..."
+    bash scripts/install-nginx.sh
+    ok "Nginx instalado"
 else
-    log "Docker Compose não encontrado. Tentando instalar..."
-    if apt-get install -y docker-compose-plugin 2>/dev/null; then
-        COMPOSE="docker compose"
-        ok "Docker Compose V2 instalado."
-    else
-        pip3 install docker-compose --quiet 2>/dev/null || true
-        if command -v docker-compose >/dev/null 2>&1; then
-            COMPOSE="docker-compose"
-            ok "Docker Compose V1 instalado via pip."
-        else
-            error "Não foi possível instalar o Docker Compose."
-        fi
-    fi
+    ok "Nginx já instalado: $(nginx -v 2>&1)"
 fi
-export COMPOSE
 
-# ── Nginx ─────────────────────────────────────────────────────────────────────
-section "Instalando Nginx"
-bash scripts/install-nginx.sh
-
-# ── Verificar integridade do nginx.conf (nunca sobrescrever) ──────────────────
-section "Validando nginx.conf do Ubuntu"
-NGINX_CONF="/etc/nginx/nginx.conf"
-if [ ! -f "$NGINX_CONF" ]; then
-    error "Arquivo ${NGINX_CONF} não encontrado. Reinstale o Nginx: apt-get install --reinstall nginx"
+# Verificar includes no nginx.conf (nunca sobrescrever o nginx.conf do Ubuntu)
+if ! grep -q "sites-enabled" /etc/nginx/nginx.conf 2>/dev/null; then
+    warn "nginx.conf sem include sites-enabled — adicionando..."
+    echo -e "\ninclude /etc/nginx/sites-enabled/*;" >> /etc/nginx/nginx.conf
+    ok "include adicionado ao nginx.conf"
 fi
-# Garantir que os includes obrigatórios existam no nginx.conf
-if ! grep -q "include /etc/nginx/sites-enabled" "$NGINX_CONF"; then
-    warn "nginx.conf não contém 'include /etc/nginx/sites-enabled/*'. Adicionando..."
-    # Adiciona o include dentro do bloco http, antes do fechamento
-    sed -i '/^http {/a\\tinclude /etc/nginx/conf.d/*.conf;\n\tinclude /etc/nginx/sites-enabled/*;' "$NGINX_CONF"
-    ok "Includes adicionados ao nginx.conf."
-else
-    ok "nginx.conf contém os includes necessários."
-fi
-mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
 
-# ── Certbot ───────────────────────────────────────────────────────────────────
-section "Instalando Certbot"
-bash scripts/install-certbot.sh
-
-# ── Firewall ──────────────────────────────────────────────────────────────────
-section "Configurando Firewall"
-bash scripts/firewall.sh
-
-# ── Diretórios ────────────────────────────────────────────────────────────────
-section "Criando diretórios"
-mkdir -p ssl backups config/nginx/sites /var/www/certbot
-ok "Diretórios criados."
-
-# ── OHIF app-config.js ────────────────────────────────────────────────────────
-section "Gerando configuração OHIF (app-config.js)"
+# ── Gerar app-config.js OHIF v3 ───────────────────────────────────────────────
+section "Gerando configuração OHIF"
 bash scripts/install-ohif.sh
+ok "app-config.js gerado em formato OHIF v3 (dataSources)"
 
-# ── VirtualHost Nginx em sites-available/ ────────────────────────────────────
+# ── Gerar configurações modulares do Orthanc ──────────────────────────────────
+section "Gerando configurações Orthanc"
+ORTHANC_B64=$(echo -n "${ORTHANC_USERNAME}:${ORTHANC_PASSWORD}" | base64 -w0)
+
+# credentials.json — gerado dinamicamente (nunca versionar com senha real)
+cat > orthanc/credentials.json << CREDEOF
+{
+  "AuthenticationEnabled": true,
+  "RegisteredUsers": {
+    "${ORTHANC_USERNAME}": "${ORTHANC_PASSWORD}"
+  }
+}
+CREDEOF
+ok "orthanc/credentials.json gerado"
+
+# dicomweb.json — substitui placeholder do domínio
+sed "s/DOMAIN_PLACEHOLDER/${DOMAIN}/g" orthanc/dicomweb.json > /tmp/dicomweb.json
+cp /tmp/dicomweb.json orthanc/dicomweb.json
+ok "orthanc/dicomweb.json configurado para: ${DOMAIN}"
+
+# postgresql.json — substitui placeholders do banco
+sed -e "s/POSTGRES_DB_PLACEHOLDER/${POSTGRES_DB}/g" \
+    -e "s/POSTGRES_USER_PLACEHOLDER/${POSTGRES_USER}/g" \
+    -e "s/POSTGRES_PASSWORD_PLACEHOLDER/${POSTGRES_PASSWORD}/g" \
+    orthanc/postgresql.json > /tmp/postgresql.json
+cp /tmp/postgresql.json orthanc/postgresql.json
+ok "orthanc/postgresql.json configurado"
+
+# ── Gerar VirtualHost Nginx ───────────────────────────────────────────────────
 section "Gerando VirtualHost Nginx"
 OHIF_PORT_VAL="${OHIF_PORT:-3000}"
-ORTHANC_B64=$(echo -n "${ORTHANC_USERNAME}:${ORTHANC_PASSWORD}" | base64 -w0)
-ORTHANC_PROTO="${ORTHANC_PROTOCOL:-http}"
 VHOST_FILE="/etc/nginx/sites-available/voxelpacs.conf"
 
-# Criar VirtualHost em sites-available (NUNCA em nginx.conf)
-cat > "$VHOST_FILE" << NGINXCONF
-# =============================================================================
-# VOXEL PACS — VirtualHost Nginx
-# Gerado automaticamente por scripts/install.sh
-# Domínio: ${DOMAIN}
-# NÃO edite este arquivo manualmente — será regenerado pelo install.sh
-#
-# Rotas:
-#   /             → OHIF Viewer (container Docker 127.0.0.1:${OHIF_PORT_VAL})
-#   /dicom-web/   → Orthanc DICOMweb (proxy com autenticação Basic)
-#   /wado         → Orthanc WADO-URI (proxy com autenticação Basic)
-#   /open/{token} → OHIF Viewer (rota de acesso por token — resolvida pelo backend)
-#   /health       → Health check interno
-# =============================================================================
-
-server {
-    listen 80;
-    server_name ${DOMAIN};
-
-    # Desafio ACME para Let's Encrypt
-    location /.well-known/acme-challenge/ {
-        root /var/www/certbot;
-    }
-
-    # Redireciona HTTP → HTTPS
-    location / {
-        return 301 https://\$host\$request_uri;
-    }
-}
-
-server {
-    listen 443 ssl http2;
-    server_name ${DOMAIN};
-
-    ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         HIGH:!aNULL:!MD5;
-    ssl_prefer_server_ciphers on;
-    ssl_session_cache   shared:SSL:10m;
-    ssl_session_timeout 10m;
-
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header X-Frame-Options SAMEORIGIN always;
-    add_header X-Content-Type-Options nosniff always;
-    add_header X-XSS-Protection "1; mode=block" always;
-
-    # ── Proxy DICOMweb → Orthanc ─────────────────────────────────────────────
-    # Deve vir ANTES de location / para ter precedência
-    location /dicom-web/ {
-        proxy_pass         ${ORTHANC_PROTO}://${ORTHANC_HOST}:${ORTHANC_PORT}/dicom-web/;
-        proxy_set_header   Authorization "Basic ${ORTHANC_B64}";
-        proxy_set_header   Host \$host;
-        proxy_set_header   X-Real-IP \$remote_addr;
-        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_read_timeout 300s;
-        proxy_buffering    off;
-        # CORS — necessário para OHIF v3 acessar o DICOMweb
-        add_header Access-Control-Allow-Origin  "https://${DOMAIN}" always;
-        add_header Access-Control-Allow-Methods "GET, POST, OPTIONS, DELETE" always;
-        add_header Access-Control-Allow-Headers "Authorization, Content-Type, Accept" always;
-        add_header Access-Control-Expose-Headers "Content-Length, Content-Range" always;
-        if (\$request_method = OPTIONS) { return 204; }
-    }
-
-    # ── Proxy WADO-URI → Orthanc ─────────────────────────────────────────────
-    location /wado {
-        proxy_pass         ${ORTHANC_PROTO}://${ORTHANC_HOST}:${ORTHANC_PORT}/wado;
-        proxy_set_header   Authorization "Basic ${ORTHANC_B64}";
-        proxy_set_header   Host \$host;
-        proxy_read_timeout 300s;
-    }
-
-    # ── Rota /open/{token} → OHIF Viewer ─────────────────────────────────────
-    # O token é resolvido pelo backend (voxelpacs PHP), que retorna o StudyInstanceUID
-    # O Nginx repassa a requisição para o OHIF, que recebe o token como parâmetro
-    # O backend deve implementar: GET /open/{token} → redirect para /viewer?StudyInstanceUIDs=...
-    location ~ ^/open/(.+)$ {
-        proxy_pass         http://127.0.0.1:${OHIF_PORT_VAL};
-        proxy_http_version 1.1;
-        proxy_set_header   Upgrade \$http_upgrade;
-        proxy_set_header   Connection 'upgrade';
-        proxy_set_header   Host \$host;
-        proxy_set_header   X-Real-IP \$remote_addr;
-        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header   X-Forwarded-Proto \$scheme;
-        proxy_read_timeout 300s;
-    }
-
-    # ── OHIF Viewer (SPA — Single Page Application) ───────────────────────────
-    location / {
-        proxy_pass         http://127.0.0.1:${OHIF_PORT_VAL};
-        proxy_http_version 1.1;
-        proxy_set_header   Upgrade \$http_upgrade;
-        proxy_set_header   Connection 'upgrade';
-        proxy_set_header   Host \$host;
-        proxy_set_header   X-Real-IP \$remote_addr;
-        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header   X-Forwarded-Proto \$scheme;
-        proxy_cache_bypass \$http_upgrade;
-        proxy_read_timeout 300s;
-    }
-
-    # ── Health check interno ──────────────────────────────────────────────────
-    location /health {
-        return 200 "OK";
-        add_header Content-Type text/plain;
-    }
-}
-NGINXCONF
+# Gerar a partir do template nginx/voxelpacs.conf
+sed -e "s/DOMAIN_PLACEHOLDER/${DOMAIN}/g" \
+    -e "s/ORTHANC_B64_PLACEHOLDER/${ORTHANC_B64}/g" \
+    -e "s/OHIF_PORT_PLACEHOLDER/${OHIF_PORT_VAL}/g" \
+    nginx/voxelpacs.conf > "$VHOST_FILE"
 
 ok "VirtualHost criado em: ${VHOST_FILE}"
 
 # Ativar via symlink (padrão Ubuntu)
 ln -sf "$VHOST_FILE" /etc/nginx/sites-enabled/voxelpacs.conf
-ok "Symlink criado: /etc/nginx/sites-enabled/voxelpacs.conf → ${VHOST_FILE}"
+ok "Symlink: /etc/nginx/sites-enabled/voxelpacs.conf"
 
-# Remover site default do Ubuntu (se existir)
+# Remover site default do Ubuntu
 rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 
-# Validar configuração do Nginx
-if nginx -t 2>/dev/null; then
-    ok "nginx -t: configuração válida."
-    systemctl reload nginx
-    ok "Nginx recarregado."
-else
-    error "nginx -t falhou! Verifique a configuração em ${VHOST_FILE}"
-fi
+# Validar configuração
+nginx -t 2>/dev/null || error "nginx -t falhou! Verifique: ${VHOST_FILE}"
+ok "nginx -t: configuração válida"
+systemctl reload nginx
+ok "Nginx recarregado"
 
-# ── Validar server_name no Nginx (nginx -T) ───────────────────────────────────
-section "Validando server_name no Nginx"
-section "Validando server_name no Nginx"
-if nginx -T 2>/dev/null | grep -q "server_name ${DOMAIN}"; then
-    ok "server_name '${DOMAIN}' encontrado na configuração ativa do Nginx."
-else
-    error "server_name '${DOMAIN}' NÃO encontrado em 'nginx -T'.
-       Verifique se o VirtualHost foi criado corretamente em:
-         ${VHOST_FILE}
-       E se o symlink existe em:
-         /etc/nginx/sites-enabled/voxelpacs.conf
-       Execute manualmente: nginx -T | grep server_name"
-fi
+# Validar server_name
+nginx -T 2>/dev/null | grep -q "server_name ${DOMAIN}" || \
+    error "server_name '${DOMAIN}' não encontrado em nginx -T. Verifique: ${VHOST_FILE}"
+ok "server_name '${DOMAIN}' confirmado no Nginx"
 
-# ── Containers Docker ─────────────────────────────────────────────────────────
-section "Iniciando containers Docker"
+# ── Configurar Firewall ───────────────────────────────────────────────────────
+section "Configurando Firewall"
+bash scripts/firewall.sh
+ok "Firewall configurado (22/80/443 abertos; 8042/4242/3000/8080 bloqueados externamente)"
 
-# Garantir que o app-config.js existe antes de subir o container
-if [ ! -f "${PROJECT_DIR}/config/ohif/app-config.js" ]; then
-    error "config/ohif/app-config.js não encontrado!
-       O arquivo deve ser gerado antes de subir o Docker Compose.
-       Execute: bash scripts/install-ohif.sh"
-fi
-if ! grep -q "window.config" "${PROJECT_DIR}/config/ohif/app-config.js"; then
-    error "config/ohif/app-config.js parece inválido (sem window.config).
-       Regere o arquivo: bash scripts/install-ohif.sh"
-fi
-ok "app-config.js validado: ${PROJECT_DIR}/config/ohif/app-config.js"
+# ── Subir containers Docker ───────────────────────────────────────────────────
+section "Subindo containers Docker"
 
-# Subir Compose a partir da pasta docker/ (onde está o docker-compose.yml)
-# Os volumes usam ../ para referenciar a raiz do projeto
-DOCKER_DIR="${PROJECT_DIR}/docker"
-if [ ! -d "$DOCKER_DIR" ]; then
-    error "Pasta docker/ não encontrada em: ${DOCKER_DIR}"
-fi
-if [ ! -f "${DOCKER_DIR}/docker-compose.yml" ]; then
-    error "docker/docker-compose.yml não encontrado em: ${DOCKER_DIR}/docker-compose.yml"
-fi
+# Validar que app-config.js existe e é válido
+[ -f "ohif/app-config.js" ] || error "ohif/app-config.js não encontrado. Execute: bash scripts/install-ohif.sh"
+grep -q "dataSources" ohif/app-config.js || error "ohif/app-config.js inválido: sem dataSources (formato OHIF v3)"
+ok "ohif/app-config.js validado"
 
-cd "$DOCKER_DIR"
-$COMPOSE pull
+# Validar docker-compose.yml
+[ -f "docker/docker-compose.yml" ] || error "docker/docker-compose.yml não encontrado"
+
+cd docker
+log "Baixando imagens..."
+$COMPOSE pull 2>/dev/null || warn "Algumas imagens não puderam ser baixadas (verifique a API)"
+log "Subindo containers..."
 $COMPOSE up -d --build --remove-orphans
 cd "$PROJECT_DIR"
-ok "Containers iniciados a partir de: ${DOCKER_DIR}"
+ok "Containers iniciados"
 
-# ── Aguardar OHIF ─────────────────────────────────────────────────────────────
-section "Validando containers"
-sleep 8
-for i in $(seq 1 15); do
-    STATUS=$(docker inspect --format='{{.State.Status}}' voxelpacs-ohif 2>/dev/null || echo "unknown")
-    if [[ "$STATUS" == "running" ]]; then ok "Container OHIF: running"; break; fi
-    warn "Aguardando OHIF... (${i}/15) Status: ${STATUS}"; sleep 10
-done
+# Aguardar containers estabilizarem
+log "Aguardando containers estabilizarem (30s)..."
+sleep 30
 
 # ── SSL Let's Encrypt ─────────────────────────────────────────────────────────
 if [[ "${GENERATE_SSL:-yes}" == "yes" ]]; then
@@ -337,15 +216,11 @@ if [[ "${GENERATE_SSL:-yes}" == "yes" ]]; then
     ok "SSL configurado para: ${DOMAIN}"
 fi
 
-
-# ── Healthcheck automático (critério de aceite do deploy) ─────────────────────
+# ── Healthcheck automático (critério de aceite) ───────────────────────────────
 section "Healthcheck — validando stack completa"
-log "Aguardando 10s para os serviços estabilizarem..."
+log "Aguardando 10s adicionais para serviços estabilizarem..."
 sleep 10
 
-# Executa o healthcheck completo em cascata:
-#   Docker → Container OHIF → HTTP localhost:3000
-#   → GET /dicom-web/studies → SSL → Proxy Nginx → Orthanc
 if bash scripts/healthcheck.sh; then
     HEALTH_EXIT=0
 else
@@ -354,18 +229,19 @@ fi
 
 # ── Resultado final ───────────────────────────────────────────────────────────
 section "Instalação concluída!"
-ORTHANC_URL="${ORTHANC_PROTOCOL:-http}://${ORTHANC_HOST}:${ORTHANC_PORT}"
 echo -e "${GREEN}${BOLD}"
-echo "  ✅ VOXEL PACS instalado com sucesso!"
-echo "  🌐 OHIF Viewer:    https://${DOMAIN}"
-echo "  🔗 Orthanc remoto: ${ORTHANC_URL}"
+echo "  ✅ VOXEL PACS v1.0 instalado com sucesso!"
+echo "  🌐 OHIF Viewer:      https://${DOMAIN}"
+echo "  🔗 API VOXEL PACS:   https://${DOMAIN}/api"
+echo "  🏥 Orthanc:          http://127.0.0.1:8042 (apenas local)"
+echo "  🗄️  PostgreSQL:       127.0.0.1:5432 (apenas Docker network)"
 echo ""
 echo "  📋 Comandos úteis:"
 echo "     bash scripts/healthcheck.sh   — verificar saúde"
 echo "     bash scripts/update.sh        — atualizar"
 echo "     bash scripts/backup.sh        — backup"
+echo "     bash scripts/restore.sh       — restaurar"
 echo "     bash scripts/rollback.sh      — reverter versão"
 echo -e "${NC}"
 
-# Retorna o exit code do healthcheck para CI/CD
 exit ${HEALTH_EXIT}

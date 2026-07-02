@@ -1,33 +1,29 @@
 # =============================================================================
-# VOXEL PACS — .gitignore
+# VOXEL PACS DEPLOY — .gitignore
 # =============================================================================
 
 # Variáveis de ambiente (NUNCA versionar)
 .env
+.env.local
+.env.production
 
-# Diretório de backups
+# Volumes Docker (dados gerados em runtime)
+storage/dicom/
+postgres/data/
+logs/
 backups/
 
-# Certificados SSL (gerados pelo Certbot no servidor)
-# Os caminhos reais são em /etc/letsencrypt, mas por segurança:
-*.pem
-*.key
-*.crt
-*.csr
+# Configurações geradas dinamicamente pelo install.sh
+# (contêm senhas — geradas a partir do .env)
+orthanc/credentials.json
+orthanc/postgresql.json
 
-# Logs
-*.log
-logs/
+# SSL (gerado pelo Certbot)
+ssl/
 
-# Arquivos temporários do sistema operacional
-.DS_Store
-Thumbs.db
-
-# Dependências Node.js (caso scripts JS sejam adicionados futuramente)
-node_modules/
-
-# Arquivos de IDE
-.idea/
-.vscode/
+# Temporários
+*.tmp
+*.bak
 *.swp
-*.swo
+*~
+.DS_Store

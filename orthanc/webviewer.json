@@ -1,0 +1,15 @@
+{
+  // ==========================================================================
+  // VOXEL PACS — orthanc/webviewer.json
+  // Configuração de integração com OHIF Viewer
+  // O OHIF acessa o Orthanc via DICOMweb (proxy Nginx)
+  // ==========================================================================
+  "WebViewer": {
+    "Enable": false
+  },
+
+  // Stone Web Viewer (alternativa ao OHIF, desabilitado por padrão)
+  "StoneWebViewer": {
+    "Enable": false
+  }
+}

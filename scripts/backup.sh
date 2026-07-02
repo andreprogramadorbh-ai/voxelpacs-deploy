@@ -1,62 +1,98 @@
 #!/usr/bin/env bash
 # =============================================================================
 # VOXEL PACS — scripts/backup.sh
-# Gera backup completo: config, docker, logs, certificados, app-config.js
+# Backup separado em 3 partes (nunca um backup único):
+#   1. Banco PostgreSQL  (pg_dump → backup/postgres/)
+#   2. Storage DICOM     (tar → backup/storage/)
+#   3. Configs           (tar → backup/configs/)
+#
+# Uso:
+#   bash scripts/backup.sh              # backup completo
+#   bash scripts/backup.sh --db         # apenas banco
+#   bash scripts/backup.sh --storage    # apenas storage DICOM
+#   bash scripts/backup.sh --configs    # apenas configs
 # =============================================================================
 set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
+GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; BOLD='\033[1m'; NC='\033[0m'
 ok()      { echo -e "${GREEN}  ✔${NC} $*"; }
-section() { echo -e "\n${BOLD}${BLUE}══ $* ══${NC}\n"; }
+warn()    { echo -e "${YELLOW}  ⚠${NC} $*"; }
+error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
+log()     { echo -e "${BLUE}  →${NC} $*"; }
+section() { echo -e "\n${BOLD}${BLUE}══ $* ══${NC}"; }
 
 [ -f ".env" ] && source .env
 
-BACKUP_DIR="${BACKUP_DIR:-./backups}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BACKUP_NAME="voxelpacs_backup_${TIMESTAMP}"
-BACKUP_PATH="${BACKUP_DIR}/${BACKUP_NAME}"
+BACKUP_BASE="${BACKUP_DIR:-./backups}/${TIMESTAMP}"
+BACKUP_DB="${BACKUP_BASE}/postgres"
+BACKUP_STORAGE="${BACKUP_BASE}/storage"
+BACKUP_CONFIGS="${BACKUP_BASE}/configs"
 
-mkdir -p "${BACKUP_PATH}/config"
-mkdir -p "${BACKUP_PATH}/docker"
-mkdir -p "${BACKUP_PATH}/logs"
-mkdir -p "${BACKUP_PATH}/ssl"
+DO_DB=true; DO_STORAGE=true; DO_CONFIGS=true
+[ "${1:-}" == "--db" ]      && { DO_STORAGE=false; DO_CONFIGS=false; }
+[ "${1:-}" == "--storage" ] && { DO_DB=false; DO_CONFIGS=false; }
+[ "${1:-}" == "--configs" ] && { DO_DB=false; DO_STORAGE=false; }
 
-section "VOXEL PACS — Backup ${TIMESTAMP}"
+mkdir -p "$BACKUP_DB" "$BACKUP_STORAGE" "$BACKUP_CONFIGS"
 
-# Configurações
-cp -r config/ "${BACKUP_PATH}/config/" 2>/dev/null && ok "config/ copiado"
-cp .env "${BACKUP_PATH}/.env" 2>/dev/null && ok ".env copiado"
-
-# Docker
-cp docker/docker-compose.yml "${BACKUP_PATH}/docker/" 2>/dev/null && ok "docker-compose.yml copiado"
-cp docker/app-config.js "${BACKUP_PATH}/docker/" 2>/dev/null && ok "app-config.js copiado"
-cp docker/Dockerfile "${BACKUP_PATH}/docker/" 2>/dev/null || true
-
-# Logs dos containers
-docker logs voxelpacs-ohif > "${BACKUP_PATH}/logs/ohif.log" 2>&1 || true
-docker logs voxelpacs-nginx > "${BACKUP_PATH}/logs/nginx.log" 2>&1 || true
-ok "Logs copiados."
-
-# Certificados SSL
-if [ -d "/etc/letsencrypt/live/${DOMAIN:-voxelpacs}" ]; then
-    cp -r "/etc/letsencrypt/live/${DOMAIN:-voxelpacs}" "${BACKUP_PATH}/ssl/" 2>/dev/null && ok "Certificados SSL copiados."
-else
-    echo -e "${YELLOW}  ⚠ Certificados SSL não encontrados.${NC}"
+# ── 1. Backup banco PostgreSQL ────────────────────────────────────────────────
+if $DO_DB; then
+    section "Backup PostgreSQL"
+    if docker ps --format '{{.Names}}' | grep -q "voxelpacs-postgres"; then
+        log "Executando pg_dump..."
+        docker exec voxelpacs-postgres pg_dump \
+            -U "${POSTGRES_USER:-voxelpacs}" \
+            -d "${POSTGRES_DB:-voxelpacs}" \
+            --format=custom \
+            --compress=9 \
+            > "${BACKUP_DB}/voxelpacs_${TIMESTAMP}.dump"
+        SIZE=$(du -sh "${BACKUP_DB}/voxelpacs_${TIMESTAMP}.dump" | cut -f1)
+        ok "Banco: ${BACKUP_DB}/voxelpacs_${TIMESTAMP}.dump (${SIZE})"
+    else
+        warn "Container postgres não está rodando — backup do banco ignorado"
+    fi
 fi
 
-# Compactar
-cd "${BACKUP_DIR}"
-tar -czf "${BACKUP_NAME}.tar.gz" "${BACKUP_NAME}/"
-rm -rf "${BACKUP_NAME}/"
-cd "$PROJECT_DIR"
+# ── 2. Backup Storage DICOM ───────────────────────────────────────────────────
+if $DO_STORAGE; then
+    section "Backup Storage DICOM"
+    if [ -d "storage/dicom" ] && [ "$(ls -A storage/dicom 2>/dev/null)" ]; then
+        log "Comprimindo storage DICOM..."
+        tar -czf "${BACKUP_STORAGE}/dicom_${TIMESTAMP}.tar.gz" -C storage dicom
+        SIZE=$(du -sh "${BACKUP_STORAGE}/dicom_${TIMESTAMP}.tar.gz" | cut -f1)
+        ok "Storage: ${BACKUP_STORAGE}/dicom_${TIMESTAMP}.tar.gz (${SIZE})"
+    else
+        warn "storage/dicom vazio ou não encontrado — backup ignorado"
+    fi
+fi
 
-BACKUP_SIZE=$(du -sh "${BACKUP_DIR}/${BACKUP_NAME}.tar.gz" | cut -f1)
-ok "Backup criado: ${BACKUP_DIR}/${BACKUP_NAME}.tar.gz (${BACKUP_SIZE})"
+# ── 3. Backup Configs ─────────────────────────────────────────────────────────
+if $DO_CONFIGS; then
+    section "Backup Configs"
+    # Inclui: orthanc/, nginx/, ohif/, docker/, scripts/, .env
+    # Exclui: storage/, postgres/data/, backups/, .git/
+    tar -czf "${BACKUP_CONFIGS}/configs_${TIMESTAMP}.tar.gz" \
+        --exclude='./storage' \
+        --exclude='./postgres/data' \
+        --exclude='./backups' \
+        --exclude='./.git' \
+        --exclude='./logs' \
+        .
+    SIZE=$(du -sh "${BACKUP_CONFIGS}/configs_${TIMESTAMP}.tar.gz" | cut -f1)
+    ok "Configs: ${BACKUP_CONFIGS}/configs_${TIMESTAMP}.tar.gz (${SIZE})"
+fi
 
-# Manter apenas os últimos 10 backups
-ls -t "${BACKUP_DIR}"/*.tar.gz 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
-echo -e "\n${GREEN}${BOLD}  ✅ Backup concluído!${NC}\n"
+# ── Resumo ────────────────────────────────────────────────────────────────────
+section "Backup concluído"
+echo -e "${GREEN}${BOLD}"
+echo "  Timestamp: ${TIMESTAMP}"
+echo "  Diretório: ${BACKUP_BASE}"
+$DO_DB      && echo "  ✔ Banco PostgreSQL"
+$DO_STORAGE && echo "  ✔ Storage DICOM"
+$DO_CONFIGS && echo "  ✔ Configs"
+echo -e "${NC}"

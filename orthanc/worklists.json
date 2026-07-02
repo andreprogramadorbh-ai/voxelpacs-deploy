@@ -1,0 +1,13 @@
+{
+  // ==========================================================================
+  // VOXEL PACS — orthanc/worklists.json
+  // DICOM Modality Worklists
+  // Documentação: https://book.orthanc-server.com/plugins/worklists.html
+  //
+  // Habilitar quando integrar com RIS/HIS para worklists automáticas
+  // ==========================================================================
+  "Worklists": {
+    "Enable": false,
+    "Database": "/var/lib/orthanc/worklists"
+  }
+}

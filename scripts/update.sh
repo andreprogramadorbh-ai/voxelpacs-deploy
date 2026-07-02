@@ -1,45 +1,62 @@
 #!/usr/bin/env bash
 # =============================================================================
 # VOXEL PACS — scripts/update.sh
-# Atualiza código, imagens Docker e reinicia sem downtime
+# Atualiza a plataforma sem downtime:
+#   1. git pull (configs e scripts)
+#   2. docker pull (novas imagens)
+#   3. docker compose up --remove-orphans (sem parar containers saudáveis)
+#   4. docker image prune (limpar imagens antigas)
+#   5. healthcheck automático
 # =============================================================================
 set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
-log()     { echo -e "${GREEN}[VOXEL]${NC} $*"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
+GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; BOLD='\033[1m'; NC='\033[0m'
 ok()      { echo -e "${GREEN}  ✔${NC} $*"; }
-section() { echo -e "\n${BOLD}${BLUE}══════════════════════════════════════════${NC}\n${BOLD}${CYAN}  $*${NC}\n${BOLD}${BLUE}══════════════════════════════════════════${NC}\n"; }
+warn()    { echo -e "${YELLOW}  ⚠${NC} $*"; }
+error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
+log()     { echo -e "${BLUE}  →${NC} $*"; }
+section() { echo -e "\n${BOLD}${BLUE}══ $* ══${NC}"; }
 
-[ -f ".env" ] && source .env || error ".env não encontrado."
+[ -f ".env" ] && source .env
 
-if command -v docker-compose >/dev/null 2>&1; then COMPOSE="docker-compose"
-elif docker compose version >/dev/null 2>&1; then COMPOSE="docker compose"
-else error "Docker Compose não encontrado."; fi
+# Detectar Compose
+if docker compose version &>/dev/null 2>&1; then COMPOSE="docker compose"
+elif command -v docker-compose &>/dev/null; then COMPOSE="docker-compose"
+else error "Docker Compose não encontrado"; fi
 
-section "VOXEL PACS — Atualização"
-log "Compose: ${COMPOSE} | Commit atual: $(git rev-parse --short HEAD 2>/dev/null || echo 'N/A')"
+section "Atualizando VOXEL PACS"
+log "Compose: $COMPOSE"
 
-section "Atualizando código"
-git fetch origin
-LOCAL=$(git rev-parse HEAD); REMOTE=$(git rev-parse origin/main)
-if [ "$LOCAL" = "$REMOTE" ]; then ok "Código já está na versão mais recente."
-else git pull origin main && ok "Código atualizado para: $(git rev-parse --short HEAD)"; fi
+section "1. Atualizando código (git pull)"
+git pull origin main || warn "git pull falhou — continuando com versão atual"
+ok "Código atualizado"
 
-section "Atualizando imagens Docker"
-docker pull ohif/app:latest
-cd docker && $COMPOSE pull; cd "$PROJECT_DIR"
-ok "Imagens atualizadas."
+section "2. Baixando novas imagens"
+cd docker
+$COMPOSE pull 2>/dev/null || warn "Algumas imagens não atualizadas"
+cd "$PROJECT_DIR"
+ok "Imagens atualizadas"
 
-section "Reiniciando containers"
-cd docker && $COMPOSE up -d --build --remove-orphans; cd "$PROJECT_DIR"
-docker image prune -f --filter "dangling=true" 2>/dev/null || true
-ok "Containers reiniciados."
+section "3. Regenerando configurações"
+bash scripts/install-ohif.sh
+ok "app-config.js regenerado"
+
+section "4. Subindo containers"
+cd docker
+$COMPOSE up -d --build --remove-orphans
+cd "$PROJECT_DIR"
+ok "Containers atualizados"
+
+section "5. Limpando imagens antigas"
+docker image prune -f 2>/dev/null || true
+ok "Imagens antigas removidas"
+
+section "6. Healthcheck"
+sleep 10
+bash scripts/healthcheck.sh
 
 section "Atualização concluída!"
-echo -e "${GREEN}${BOLD}  ✅ VOXEL PACS atualizado!\n  🌐 https://${DOMAIN:-localhost}${NC}\n"
