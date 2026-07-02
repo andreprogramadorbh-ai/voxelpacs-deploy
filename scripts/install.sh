@@ -148,10 +148,17 @@ VHOST_FILE="/etc/nginx/sites-available/voxelpacs.conf"
 # Criar VirtualHost em sites-available (NUNCA em nginx.conf)
 cat > "$VHOST_FILE" << NGINXCONF
 # =============================================================================
-# VOXEL PACS — VirtualHost
+# VOXEL PACS — VirtualHost Nginx
 # Gerado automaticamente por scripts/install.sh
 # Domínio: ${DOMAIN}
 # NÃO edite este arquivo manualmente — será regenerado pelo install.sh
+#
+# Rotas:
+#   /             → OHIF Viewer (container Docker 127.0.0.1:${OHIF_PORT_VAL})
+#   /dicom-web/   → Orthanc DICOMweb (proxy com autenticação Basic)
+#   /wado         → Orthanc WADO-URI (proxy com autenticação Basic)
+#   /open/{token} → OHIF Viewer (rota de acesso por token — resolvida pelo backend)
+#   /health       → Health check interno
 # =============================================================================
 
 server {
@@ -186,7 +193,49 @@ server {
     add_header X-Content-Type-Options nosniff always;
     add_header X-XSS-Protection "1; mode=block" always;
 
-    # OHIF Viewer
+    # ── Proxy DICOMweb → Orthanc ─────────────────────────────────────────────
+    # Deve vir ANTES de location / para ter precedência
+    location /dicom-web/ {
+        proxy_pass         ${ORTHANC_PROTO}://${ORTHANC_HOST}:${ORTHANC_PORT}/dicom-web/;
+        proxy_set_header   Authorization "Basic ${ORTHANC_B64}";
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_read_timeout 300s;
+        proxy_buffering    off;
+        # CORS — necessário para OHIF v3 acessar o DICOMweb
+        add_header Access-Control-Allow-Origin  "https://${DOMAIN}" always;
+        add_header Access-Control-Allow-Methods "GET, POST, OPTIONS, DELETE" always;
+        add_header Access-Control-Allow-Headers "Authorization, Content-Type, Accept" always;
+        add_header Access-Control-Expose-Headers "Content-Length, Content-Range" always;
+        if (\$request_method = OPTIONS) { return 204; }
+    }
+
+    # ── Proxy WADO-URI → Orthanc ─────────────────────────────────────────────
+    location /wado {
+        proxy_pass         ${ORTHANC_PROTO}://${ORTHANC_HOST}:${ORTHANC_PORT}/wado;
+        proxy_set_header   Authorization "Basic ${ORTHANC_B64}";
+        proxy_set_header   Host \$host;
+        proxy_read_timeout 300s;
+    }
+
+    # ── Rota /open/{token} → OHIF Viewer ─────────────────────────────────────
+    # O token é resolvido pelo backend (voxelpacs PHP), que retorna o StudyInstanceUID
+    # O Nginx repassa a requisição para o OHIF, que recebe o token como parâmetro
+    # O backend deve implementar: GET /open/{token} → redirect para /viewer?StudyInstanceUIDs=...
+    location ~ ^/open/(.+)$ {
+        proxy_pass         http://127.0.0.1:${OHIF_PORT_VAL};
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade \$http_upgrade;
+        proxy_set_header   Connection 'upgrade';
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 300s;
+    }
+
+    # ── OHIF Viewer (SPA — Single Page Application) ───────────────────────────
     location / {
         proxy_pass         http://127.0.0.1:${OHIF_PORT_VAL};
         proxy_http_version 1.1;
@@ -200,27 +249,7 @@ server {
         proxy_read_timeout 300s;
     }
 
-    # Proxy DICOMweb → Orthanc (evita CORS no navegador)
-    location /dicom-web/ {
-        proxy_pass         ${ORTHANC_PROTO}://${ORTHANC_HOST}:${ORTHANC_PORT}/dicom-web/;
-        proxy_set_header   Authorization "Basic ${ORTHANC_B64}";
-        proxy_set_header   Host \$host;
-        proxy_read_timeout 300s;
-        add_header         Access-Control-Allow-Origin "*" always;
-        add_header         Access-Control-Allow-Methods "GET, POST, OPTIONS" always;
-        add_header         Access-Control-Allow-Headers "Authorization, Content-Type" always;
-        if (\$request_method = OPTIONS) { return 204; }
-    }
-
-    # Proxy WADO → Orthanc
-    location /wado {
-        proxy_pass         ${ORTHANC_PROTO}://${ORTHANC_HOST}:${ORTHANC_PORT}/wado;
-        proxy_set_header   Authorization "Basic ${ORTHANC_B64}";
-        proxy_set_header   Host \$host;
-        proxy_read_timeout 300s;
-    }
-
-    # Health check interno
+    # ── Health check interno ──────────────────────────────────────────────────
     location /health {
         return 200 "OK";
         add_header Content-Type text/plain;
@@ -247,6 +276,7 @@ else
 fi
 
 # ── Validar server_name no Nginx (nginx -T) ───────────────────────────────────
+section "Validando server_name no Nginx"
 section "Validando server_name no Nginx"
 if nginx -T 2>/dev/null | grep -q "server_name ${DOMAIN}"; then
     ok "server_name '${DOMAIN}' encontrado na configuração ativa do Nginx."

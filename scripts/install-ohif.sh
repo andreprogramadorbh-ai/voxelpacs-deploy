@@ -2,14 +2,14 @@
 # =============================================================================
 # VOXEL PACS — scripts/install-ohif.sh
 #
-# Gera config/ohif/app-config.js dinamicamente a partir do .env
+# Gera config/ohif/app-config.js compatível com OHIF v3 (ohif/app:v3.12.5)
 # DEVE ser executado ANTES de subir o Docker Compose
 #
-# ARQUITETURA DO app-config.js:
-#   - Usa APENAS caminhos relativos: /dicom-web e /wado
-#   - NENHUM IP, porta ou domínio externo
-#   - O Nginx no host faz o proxy reverso para o Orthanc remoto
-#   - O OHIF nunca acessa o Orthanc diretamente
+# FORMATO OHIF v3:
+#   - Usa `dataSources` com `namespace` e `configuration`
+#   - NÃO usa `servers: { dicomWeb: [...] }` (formato v2 — causa erro:
+#     "appConfig.extensions is not iterable")
+#   - extensions: [] e modes: [] = OHIF carrega os defaults da imagem
 #
 # Uso:
 #   bash scripts/install-ohif.sh
@@ -38,58 +38,119 @@ done
 
 # ── Valores com fallback ──────────────────────────────────────────────────────
 OHIF_NAME_VAL="${OHIF_NAME:-VOXEL PACS}"
+DOMAIN_VAL="${DOMAIN}"
 QIDO_ROOT_VAL="${QIDO_ROOT:-/dicom-web}"
 WADO_ROOT_VAL="${WADO_ROOT:-/dicom-web}"
 WADO_URI_ROOT_VAL="${WADO_URI_ROOT:-/wado}"
+
+# Construir URLs absolutas para o proxy Nginx
+QIDO_URL="https://${DOMAIN_VAL}${QIDO_ROOT_VAL}"
+WADO_URL="https://${DOMAIN_VAL}${WADO_ROOT_VAL}"
+WADO_URI_URL="https://${DOMAIN_VAL}${WADO_URI_ROOT_VAL}"
 
 # ── Criar diretórios necessários ──────────────────────────────────────────────
 mkdir -p config/ohif/logo
 
 # ── Gerar app-config.js em config/ohif/ ──────────────────────────────────────
-# REGRA FUNDAMENTAL:
-#   - Usar APENAS caminhos relativos (qidoRoot, wadoRoot, wadoUriRoot)
-#   - NUNCA incluir IP, porta ou domínio externo
-#   - O Nginx faz proxy: /dicom-web → Orthanc remoto
-#   - O OHIF nunca acessa o Orthanc diretamente
+# FORMATO OHIF v3 — dataSources com namespace
+# NÃO usar servers.dicomWeb (v2) — causa "appConfig.extensions is not iterable"
 APP_CONFIG_PATH="config/ohif/app-config.js"
 
 cat > "$APP_CONFIG_PATH" << APPCONFIG
 // =============================================================================
 // VOXEL PACS — app-config.js
-// Gerado automaticamente por scripts/install-ohif.sh
-// NÃO edite este arquivo manualmente — será regenerado pelo install.sh
+// Compatível com: ohif/app:v3.12.5 (OHIF Viewer v3)
+// Gerado por:     scripts/install-ohif.sh em $(date '+%Y-%m-%d %H:%M:%S')
 //
-// ARQUITETURA:
-//   - Caminhos relativos apenas (/dicom-web, /wado)
-//   - Nenhum IP, porta ou domínio externo
-//   - Nginx faz proxy reverso: /dicom-web → Orthanc remoto
+// IMPORTANTE: Formato OHIF v3 com dataSources.
+// O formato antigo servers.dicomWeb (v2) causa:
+//   "appConfig.extensions is not iterable"
+//
+// Arquitetura:
+//   OHIF → https://${DOMAIN_VAL} → Nginx proxy → Orthanc remoto
 // =============================================================================
+
+/** @type {AppTypes.Config} */
 window.config = {
   routerBasename: '/',
+
+  // extensions: [] e modes: [] = OHIF carrega os defaults embutidos na imagem
+  // NÃO preencher manualmente para evitar erros de compatibilidade
+  extensions: [],
+  modes: [],
+
   showStudyList: true,
-  servers: {
-    dicomWeb: [
-      {
-        name: '${OHIF_NAME_VAL}',
-        // Caminhos relativos — roteados pelo Nginx para o Orthanc remoto
-        qidoRoot:    '${QIDO_ROOT_VAL}',
-        wadoRoot:    '${WADO_ROOT_VAL}',
-        wadoUriRoot: '${WADO_URI_ROOT_VAL}',
+  showLoadingIndicator: true,
+  showCPUFallbackMessage: true,
+  showWarningMessageForCrossOrigin: false,
+  showErrorDetails: 'dev',
+  groupEnabledModesFirst: true,
+  maxNumberOfWebWorkers: 3,
+
+  // ---------------------------------------------------------------------------
+  // Data Source — OHIF v3
+  // Substitui o formato servers.dicomWeb da v2
+  // ---------------------------------------------------------------------------
+  defaultDataSourceName: 'voxelpacs',
+
+  dataSources: [
+    {
+      namespace: '@ohif/extension-default.dataSourcesModule.dicomweb',
+      sourceName: 'voxelpacs',
+      configuration: {
+        friendlyName: '${OHIF_NAME_VAL}',
+        name: 'voxelpacs',
+
+        // QIDO-RS: busca de estudos, séries e instâncias
+        qidoRoot: '${QIDO_URL}',
+
+        // WADO-RS: recuperação de imagens e metadados (multipart)
+        wadoRoot: '${WADO_URL}',
+
+        // WADO-URI: recuperação de imagens (single part)
+        wadoUriRoot: '${WADO_URI_URL}',
+
+        // Capacidades do Orthanc
         qidoSupportsIncludeField: true,
-        imageRendering:     'wadors',
-        thumbnailRendering: 'wadors',
-        enableStudyLazyLoad: true,
+        supportsReject: true,
+        supportsStow: false,
         supportsFuzzyMatching: true,
+        supportsWildcard: true,
+
+        // Renderização
+        imageRendering: 'wadors',
+        thumbnailRendering: 'wadors',
+
+        // Performance
+        enableStudyLazyLoad: true,
+        omitQuotationForMultipartRequest: true,
+
+        // BulkData — necessário para Orthanc com proxy reverso
+        bulkDataURI: {
+          enabled: true,
+          relativeResolution: 'series',
+        },
       },
-    ],
-  },
+    },
+  ],
+
+  // ---------------------------------------------------------------------------
+  // Identidade visual VOXEL PACS
+  // ---------------------------------------------------------------------------
   whiteLabeling: {
     createLogoComponentFn: function (React) {
-      return React.createElement('a', { href: '/', className: 'text-white' },
+      return React.createElement(
+        'a',
+        {
+          href: '/',
+          target: '_self',
+          rel: 'noopener noreferrer',
+          style: { display: 'flex', alignItems: 'center' },
+        },
         React.createElement('img', {
           src: '/assets/logo/logo-voxel-pacs.png',
           alt: '${OHIF_NAME_VAL}',
-          style: { height: '30px' }
+          style: { height: '30px', objectFit: 'contain' },
         })
       );
     },
@@ -98,25 +159,23 @@ window.config = {
 APPCONFIG
 
 ok "app-config.js gerado em: ${APP_CONFIG_PATH}"
-ok "  → OHIF: ${OHIF_NAME_VAL}"
-ok "  → qidoRoot:    ${QIDO_ROOT_VAL}  (relativo — via proxy Nginx)"
-ok "  → wadoRoot:    ${WADO_ROOT_VAL}  (relativo — via proxy Nginx)"
-ok "  → wadoUriRoot: ${WADO_URI_ROOT_VAL}  (relativo — via proxy Nginx)"
+ok "  → Formato:     OHIF v3 (dataSources)"
+ok "  → OHIF:        ${OHIF_NAME_VAL}"
+ok "  → qidoRoot:    ${QIDO_URL}"
+ok "  → wadoRoot:    ${WADO_URL}"
+ok "  → wadoUriRoot: ${WADO_URI_URL}"
 
-# ── Validar que o arquivo foi gerado corretamente ─────────────────────────────
-if [ ! -f "$APP_CONFIG_PATH" ]; then
+# ── Validações ────────────────────────────────────────────────────────────────
+[ ! -f "$APP_CONFIG_PATH" ] && \
     error "Falha ao gerar ${APP_CONFIG_PATH}. Verifique permissões de escrita."
-fi
 
-if ! grep -q "window.config" "$APP_CONFIG_PATH"; then
-    error "app-config.js gerado parece inválido (sem window.config)."
-fi
+grep -q "window.config" "$APP_CONFIG_PATH" || \
+    error "app-config.js inválido: sem window.config"
 
-# ── Validar que NÃO há IP, porta ou domínio externo no app-config.js ──────────
-if grep -qE "https?://|:[0-9]{4,5}" "$APP_CONFIG_PATH"; then
-    warn "ATENÇÃO: app-config.js pode conter URLs absolutas!"
-    warn "Verifique o conteúdo: cat ${APP_CONFIG_PATH}"
-    warn "O OHIF deve usar APENAS caminhos relativos (/dicom-web, /wado)."
-fi
+grep -q "dataSources" "$APP_CONFIG_PATH" || \
+    error "app-config.js inválido: sem dataSources (formato OHIF v3 obrigatório)"
+
+grep -q "servers" "$APP_CONFIG_PATH" && \
+    warn "ATENÇÃO: app-config.js contém 'servers' (formato v2 depreciado). Verifique o arquivo."
 
 ok "app-config.js validado. Pronto para subir o Docker Compose."
