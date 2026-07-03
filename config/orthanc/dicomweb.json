@@ -1,0 +1,12 @@
+{
+  "DicomWeb" : {
+    "Enable" : true,
+    "Root" : "/dicom-web/",
+    "EnableWado" : true,
+    "WadoRoot" : "/wado",
+    "Host" : "dicom.voxelpacs.com.br",
+    "Ssl" : true,
+    "StudiesMetadata" : "Full",
+    "SeriesMetadata" : "Full"
+  }
+}
