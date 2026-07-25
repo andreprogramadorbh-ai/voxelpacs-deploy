@@ -32,7 +32,7 @@ window.config = {
       namespace: '@ohif/extension-default.dataSourcesModule.dicomweb',
       sourceName: 'voxelpacs',
       configuration: {
-        friendlyName: 'VOXEL PACS',
+        friendlyName: 'Voxel View',
         name: 'voxelpacs',
         qidoRoot:    'https://dicom.voxelpacs.com.br/dicom-web',
         wadoRoot:    'https://dicom.voxelpacs.com.br/dicom-web',
@@ -79,11 +79,11 @@ window.config = {
             letterSpacing: '0.5px',
             fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif',
           },
-        }, 'VOXEL PACS')
+        }, 'VOXEL VIEW')
       );
     },
   },
   customizationService: [
-    { 'ohif.appTitle': { value: 'VOXEL PACS — Viewer DICOM' } },
+    { 'ohif.appTitle': { value: 'Voxel View' } },
   ],
 };
