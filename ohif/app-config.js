@@ -3,10 +3,16 @@
  * =========================================================
  * Arquitetura:
  *   view.voxelpacs.com.br  → OHIF SPA (container Docker)
- *   dicom.voxelpacs.com.br → Orthanc 1.12.2 + DICOMweb 1.16 (Nginx injeta auth)
+ *   dicom.voxelpacs.com.br → Proxy Python 8043 → Orthanc 1.12.2 + DICOMweb 1.16
  *
- * Problema resolvido: Orthanc DICOMweb 1.16 não inclui TransferSyntaxUID (00020010)
- * nos metadados JSON. Solução: usar acceptHeader para pedir imagens não comprimidas.
+ * Segurança LGPD:
+ *   - showStudyList: false — desabilita a lista de exames no viewer
+ *   - Acesso apenas via token gerado pelo sistema PHP (server.voxelpacs.com.br)
+ *   - Nginx redireciona / para server.voxelpacs.com.br/estudos
+ *
+ * Fix Content-Type:
+ *   - Proxy Python remove aspas do type= no Content-Type multipart do Orthanc
+ *   - omitQuotationForMultipartRequest: true para compatibilidade Cornerstone3D
  */
 window.config = {
   routerBasename: '/',
@@ -14,7 +20,8 @@ window.config = {
   modes: [],
   defaultDataSourceName: 'voxelpacs',
   investigationalUseDialog: { option: 'never' },
-  showStudyList: true,
+  // LGPD: desabilitar Study List — acesso apenas via token do sistema PHP
+  showStudyList: false,
   maxNumberOfWebWorkers: 4,
   showLoadingIndicator: true,
   supportsWildcard: true,
@@ -46,10 +53,12 @@ window.config = {
         // Usar wadors para recuperar imagens via WADO-RS
         imageRendering: 'wadors',
         thumbnailRendering: 'wadors',
-        // Orthanc DICOMweb 1.16: omitir aspas no multipart para compatibilidade
+        // Orthanc DICOMweb 1.16 + Proxy Fix:
+        // O proxy Python (porta 8043) já remove as aspas do Content-Type multipart.
+        // Esta flag instrui o OHIF a também não enviar aspas no Accept header.
         omitQuotationForMultipartRequest: true,
         // Aceitar imagens não comprimidas (Explicit VR Little Endian)
-        // Isso garante que o Cornerstone3D consiga decodificar mesmo sem TransferSyntax nos metadados
+        // Garante decodificação pelo Cornerstone3D mesmo sem TransferSyntax nos metadados
         acceptHeader: [
           'multipart/related; type=application/octet-stream; transfer-syntax=1.2.840.10008.1.2.1',
           'multipart/related; type=application/octet-stream; transfer-syntax=*',
