@@ -1,0 +1,17 @@
+[Unit]
+Description=VOXEL PACS DICOMweb Content-Type Fix Proxy
+After=network.target orthanc.service
+Wants=orthanc.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/voxelpacs
+ExecStart=/usr/bin/python3 /opt/voxelpacs/dicom_proxy.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
