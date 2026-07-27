@@ -52,6 +52,9 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
                               'proxy-authorization', 'te', 'trailers', 'upgrade')
     }
 
+    # Injetar credenciais Orthanc (o cliente não precisa enviar Authorization)
+    req_headers["Authorization"] = "Basic dml2ZXJlX2FkbWluOklubGF1ZG8yNTkwODdA"
+
     # Ler body da requisição
     try:
         body = await request.read()
