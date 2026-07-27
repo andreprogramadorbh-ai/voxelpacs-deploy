@@ -1,18 +1,13 @@
 /**
  * VOXEL PACS — OHIF Viewer v3 — Configuração de Produção
  * =========================================================
- * Arquitetura:
- *   view.voxelpacs.com.br  → OHIF SPA (container Docker)
- *   dicom.voxelpacs.com.br → Proxy Python 8043 → Orthanc 1.12.2 + DICOMweb 1.16
- *
- * Segurança LGPD:
- *   - showStudyList: false — desabilita a lista de exames no viewer
- *   - Acesso apenas via token gerado pelo sistema PHP (server.voxelpacs.com.br)
- *   - Nginx redireciona / para server.voxelpacs.com.br/estudos
- *
- * Fix Content-Type:
- *   - Proxy Python remove aspas do type= no Content-Type multipart do Orthanc
- *   - omitQuotationForMultipartRequest: true para compatibilidade Cornerstone3D
+ * Fix Content-Type + Accept Header (v3):
+ *   - Proxy Python v3 (porta 8043):
+ *     1. Remove aspas do type= no Content-Type multipart do Orthanc
+ *     2. Reescreve Accept header para apenas 1 valor (Orthanc 1.16 não suporta múltiplos)
+ *     3. Injeta Authorization Basic automaticamente
+ *   - acceptHeader: apenas transfer-syntax=1.2.840.10008.1.2.1
+ *   - omitQuotationForMultipartRequest: true
  */
 window.config = {
   routerBasename: '/',
@@ -20,7 +15,6 @@ window.config = {
   modes: [],
   defaultDataSourceName: 'voxelpacs',
   investigationalUseDialog: { option: 'never' },
-  // LGPD: desabilitar Study List — acesso apenas via token do sistema PHP
   showStudyList: false,
   maxNumberOfWebWorkers: 4,
   showLoadingIndicator: true,
@@ -34,6 +28,10 @@ window.config = {
     thumbnail: 5,
     prefetch: 25,
   },
+  acceptHeader: [
+    'multipart/related; type=application/octet-stream; transfer-syntax=1.2.840.10008.1.2.1',
+  ],
+  omitQuotationForMultipartRequest: true,
   dataSources: [
     {
       namespace: '@ohif/extension-default.dataSourcesModule.dicomweb',
@@ -50,20 +48,9 @@ window.config = {
         supportsReject: false,
         supportsFuzzyMatching: true,
         supportsWildcard: true,
-        // Usar wadors para recuperar imagens via WADO-RS
         imageRendering: 'wadors',
         thumbnailRendering: 'wadors',
-        // Orthanc DICOMweb 1.16 + Proxy Fix:
-        // O proxy Python (porta 8043) já remove as aspas do Content-Type multipart.
-        // Esta flag instrui o OHIF a também não enviar aspas no Accept header.
         omitQuotationForMultipartRequest: true,
-        // Aceitar imagens não comprimidas (Explicit VR Little Endian)
-        // Garante decodificação pelo Cornerstone3D mesmo sem TransferSyntax nos metadados
-        acceptHeader: [
-          'multipart/related; type=application/octet-stream; transfer-syntax=1.2.840.10008.1.2.1',
-          'multipart/related; type=application/octet-stream; transfer-syntax=*',
-          'multipart/related; type=application/octet-stream',
-        ],
         bulkDataURI: {
           enabled: true,
           relativeResolution: 'series',

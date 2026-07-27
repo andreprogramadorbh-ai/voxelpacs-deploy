@@ -1,18 +1,28 @@
 #!/usr/bin/env python3
 """
-VOXEL PACS — DICOMweb Content-Type Fix Proxy v2
+VOXEL PACS — DICOMweb Content-Type Fix Proxy v3
 ================================================
-Problema: Orthanc DICOMweb 1.16 retorna Content-Type com aspas no type=
-  Ex: multipart/related; type="application/octet-stream; transfer-syntax=..."; boundary=...
-Cornerstone3D/OHIF v3.12.5 não parseia Content-Type com aspas → tela preta.
+Problemas corrigidos:
+  1. Orthanc DICOMweb 1.16 retorna Content-Type com aspas no type=
+     Ex: multipart/related; type="application/octet-stream; transfer-syntax=..."
+     Cornerstone3D/OHIF v3.12.5 não parseia Content-Type com aspas → tela preta.
 
-Solução: Proxy transparente na porta 8043 que:
-  1. Repassa todas as requisições para o Orthanc (127.0.0.1:8042)
-  2. Remove as aspas do type= no Content-Type de resposta
-  3. Trata corretamente conexões fechadas pelo cliente (browser cancela request)
-  4. Suporte a arquivos grandes (13+ MB) via streaming robusto
+  2. Orthanc DICOMweb 1.16 NÃO suporta múltiplos valores no Accept header
+     separados por vírgula. O OHIF envia:
+       Accept: multipart/related; type=application/octet-stream; transfer-syntax=1.2.840.10008.1.2.1,
+               multipart/related; type=application/octet-stream; transfer-syntax=*,
+               multipart/related; type=application/octet-stream
+     O Orthanc interpreta "1.2.840.10008.1.2.1, multipart/related" como um único
+     transfer-syntax inválido → HTTP 500 "Unknown transfer syntax".
 
-v2: Tratamento de ClientConnectionResetError e ConnectionResetError
+  3. ClientConnectionResetError quando o browser cancela requisições (normal).
+
+Solução v3:
+  1. Reescreve o Accept header para apenas o PRIMEIRO valor válido antes de
+     encaminhar para o Orthanc.
+  2. Remove aspas do type= no Content-Type de resposta.
+  3. Injeta Authorization Basic automaticamente.
+  4. Trata ClientConnectionResetError silenciosamente.
 """
 import asyncio
 import aiohttp
@@ -27,7 +37,10 @@ ORTHANC_URL = 'http://127.0.0.1:8042'
 PROXY_PORT = 8043
 CHUNK_SIZE = 131072  # 128 KB chunks para melhor performance
 
-# Regex para remover aspas do type= no Content-Type multipart
+# Credenciais Orthanc em Base64: vivere_admin:Inlaudo259087@
+ORTHANC_AUTH = 'Basic dml2ZXJlX2FkbWluOklubGF1ZG8yNTkwODdA'
+
+# Regex para remover aspas do type= no Content-Type multipart/related
 CT_FIX_RE = re.compile(r'type="([^"]+)"')
 
 
@@ -39,8 +52,38 @@ def fix_content_type(ct: str) -> str:
     return ct
 
 
+def fix_accept_header(accept: str) -> str:
+    """
+    Orthanc DICOMweb 1.16 não suporta múltiplos valores no Accept header.
+    Reescreve para apenas o primeiro valor válido (transfer-syntax=1.2.840.10008.1.2.1).
+    
+    Entrada: "multipart/related; type=application/octet-stream; transfer-syntax=1.2.840.10008.1.2.1, ..."
+    Saída:   "multipart/related; type=application/octet-stream; transfer-syntax=1.2.840.10008.1.2.1"
+    """
+    if not accept or 'multipart/related' not in accept:
+        return accept
+    
+    # Extrair apenas o primeiro segmento (antes da primeira vírgula que separa
+    # múltiplos tipos de mídia — não confundir com vírgulas dentro de parâmetros)
+    # O Accept header para WADO-RS tem a forma:
+    # "multipart/related; type=...; transfer-syntax=UID, multipart/related; ..."
+    # Precisamos dividir por ", multipart/related" para separar os tipos
+    parts = re.split(r',\s*multipart/related', accept)
+    
+    if len(parts) > 1:
+        # Pegar apenas o primeiro tipo — que tem transfer-syntax=1.2.840.10008.1.2.1
+        first = parts[0].strip()
+        # Verificar se tem um transfer-syntax específico (não *)
+        if 'transfer-syntax=1.2.840.10008.1.2.1' in first:
+            return first
+        # Se o primeiro não tem UID específico, usar apenas octet-stream sem transfer-syntax
+        return 'multipart/related; type=application/octet-stream; transfer-syntax=1.2.840.10008.1.2.1'
+    
+    return accept
+
+
 async def proxy_handler(request: web.Request) -> web.StreamResponse:
-    """Proxy transparente para o Orthanc com correção do Content-Type."""
+    """Proxy transparente para o Orthanc com correção do Accept e Content-Type."""
     # Montar URL de destino
     target_url = ORTHANC_URL + str(request.rel_url)
 
@@ -53,7 +96,15 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
     }
 
     # Injetar credenciais Orthanc (o cliente não precisa enviar Authorization)
-    req_headers["Authorization"] = "Basic dml2ZXJlX2FkbWluOklubGF1ZG8yNTkwODdA"
+    req_headers['Authorization'] = ORTHANC_AUTH
+
+    # Corrigir Accept header para compatibilidade com Orthanc DICOMweb 1.16
+    if 'Accept' in req_headers:
+        original_accept = req_headers['Accept']
+        fixed_accept = fix_accept_header(original_accept)
+        if fixed_accept != original_accept:
+            logger.debug(f'Accept rewritten: {original_accept!r} → {fixed_accept!r}')
+        req_headers['Accept'] = fixed_accept
 
     # Ler body da requisição
     try:
@@ -67,7 +118,6 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
         sock_read=600,
         sock_connect=10
     )
-
     connector = aiohttp.TCPConnector(limit=100, keepalive_timeout=30)
 
     try:
@@ -106,67 +156,51 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
                 # Criar resposta de streaming
                 response = web.StreamResponse(
                     status=upstream_resp.status,
-                    headers=resp_headers,
+                    reason=upstream_resp.reason,
+                    headers=resp_headers
                 )
+                await response.prepare(request)
 
+                # Stream do corpo em chunks
                 try:
-                    await response.prepare(request)
-
-                    # Stream do body com tratamento de erros de conexão
                     async for chunk in upstream_resp.content.iter_chunked(CHUNK_SIZE):
-                        try:
-                            await response.write(chunk)
-                        except (
-                            ConnectionResetError,
-                            aiohttp.ClientConnectionResetError,
-                            asyncio.CancelledError,
-                            BrokenPipeError,
-                        ):
-                            # Cliente fechou a conexão — comportamento normal
-                            # (browser cancela request ao navegar ou recarregar)
-                            return response
-
-                    try:
-                        await response.write_eof()
-                    except (ConnectionResetError, BrokenPipeError):
-                        pass
-
-                    return response
-
+                        await response.write(chunk)
                 except (
                     ConnectionResetError,
                     aiohttp.ClientConnectionResetError,
+                    aiohttp.ServerDisconnectedError,
                     asyncio.CancelledError,
                     BrokenPipeError,
-                ):
-                    # Cliente fechou a conexão antes de receber a resposta
+                ) as e:
+                    # Browser cancelou a requisição — comportamento normal
+                    logger.debug(f'Client disconnected (normal): {type(e).__name__}')
                     return response
 
-    except aiohttp.ClientError as e:
-        logger.error(f'Upstream error: {e}')
-        return web.Response(status=502, text=f'Bad Gateway: {e}')
+                await response.write_eof()
+                return response
+
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        logger.error(f'Proxy error: {e}')
-        return web.Response(status=500, text=f'Proxy error: {e}')
+        logger.error(f'Proxy error for {request.rel_url}: {type(e).__name__}: {e}')
+        return web.Response(
+            status=502,
+            text=f'Proxy error: {type(e).__name__}: {e}',
+            content_type='text/plain'
+        )
 
 
-async def create_app():
-    app = web.Application(client_max_size=2 * 1024 ** 3)  # 2 GB
+async def main():
+    app = web.Application()
     app.router.add_route('*', '/{path_info:.*}', proxy_handler)
-    return app
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '127.0.0.1', PROXY_PORT)
+    await site.start()
+    print(f'======== Running on http://127.0.0.1:{PROXY_PORT} ========')
+    print('(Press CTRL+C to quit)')
+    await asyncio.Event().wait()
 
 
 if __name__ == '__main__':
-    import sys
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    app = loop.run_until_complete(create_app())
-    web.run_app(
-        app,
-        host='127.0.0.1',
-        port=PROXY_PORT,
-        access_log=None,
-        loop=loop,
-    )
+    asyncio.run(main())
