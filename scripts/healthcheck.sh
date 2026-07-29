@@ -76,8 +76,12 @@ warn_check() {
 check "Docker daemon ativo" "docker info"
 
 # ── 2. Containers em execução ─────────────────────────────────────────────────
-check "Container: voxelpacs-postgres" \
-    "docker ps --filter name=voxelpacs-postgres --filter status=running | grep -q voxelpacs-postgres"
+# MySQL — banco da API PHP
+check "Container: voxelpacs-mysql" \
+    "docker ps --filter name=voxelpacs-mysql --filter status=running | grep -q voxelpacs-mysql"
+# PostgreSQL Orthanc — índice DICOM (Fase 2)
+check "Container: voxelpacs-postgres-orthanc" \
+    "docker ps --filter name=voxelpacs-postgres-orthanc --filter status=running | grep -q voxelpacs-postgres-orthanc"
 check "Container: voxelpacs-orthanc" \
     "docker ps --filter name=voxelpacs-orthanc --filter status=running | grep -q voxelpacs-orthanc"
 check "Container: voxelpacs-ohif" \
@@ -92,8 +96,12 @@ check "Orthanc HTTP localhost:8042" \
     "curl -sf --max-time 5 http://localhost:8042/system -o /dev/null -u '${ORTHANC_USERNAME:-admin}:${ORTHANC_PASSWORD:-admin}'"
 
 # ── 4. PostgreSQL via container ───────────────────────────────────────────────
-check "PostgreSQL pronto" \
-    "docker exec voxelpacs-postgres pg_isready -U ${POSTGRES_USER:-voxelpacs} -d ${POSTGRES_DB:-voxelpacs}"
+# MySQL — banco da API PHP
+check "MySQL pronto (API PHP)" \
+    "docker exec voxelpacs-mysql mysqladmin ping -h localhost -u ${DB_USERNAME:-voxelpacs_user} -p${DB_PASSWORD:-password} --silent"
+# PostgreSQL Orthanc — índice DICOM (Fase 2)
+check "PostgreSQL Orthanc pronto (índice DICOM)" \
+    "docker exec voxelpacs-postgres-orthanc pg_isready -U orthanc_user -d orthanc_voxel"
 
 # ── 5. DICOMweb via proxy Nginx ───────────────────────────────────────────────
 # 401 é aceito (proxy funcionando, autenticação necessária)

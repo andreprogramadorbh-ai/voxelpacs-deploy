@@ -2,7 +2,7 @@ version: "3.8"
 
 # =============================================================================
 # VOXEL PACS — docker/docker-compose.yml
-# Arquitetura: 4 containers + Nginx no host
+# Arquitetura: 5 containers + Nginx no host
 #
 #   Internet
 #       │
@@ -15,24 +15,30 @@ version: "3.8"
 #  ohif                 voxelpacs-api (PHP 8.1)
 #                              │
 #                              ▼
-#                           mysql
+#                           mysql ──────────────── (API PHP)
 #                              │
 #                              ▼
-#                           orthanc
+#                           orthanc ◄── postgres-orthanc (índice DICOM)
 #                              │
 #                              ▼
-#                       storage/dicom
+#                       storage/dicom (filesystem)
 #
 # SEGURANÇA:
 #   - Portas 8042/4242 (Orthanc) NUNCA expostas externamente
 #   - Portas 3000 (OHIF) e 8080 (API) apenas para 127.0.0.1
 #   - MySQL apenas na rede interna Docker
+#   - PostgreSQL Orthanc apenas na rede interna Docker (sem porta exposta)
 #
 # VERSÕES FIXAS:
-#   - OHIF:    ohif/app:v3.12.5
-#   - Orthanc: osimis/orthanc:24.11.3 (com plugins DICOMweb)
-#   - MySQL:   mysql:8.0
-#   - PHP/API: build local (./api/Dockerfile)
+#   - OHIF:               ohif/app:v3.12.5
+#   - Orthanc:            osimis/orthanc:24.11.3 (com plugins DICOMweb + PostgreSQL)
+#   - MySQL:              mysql:8.0  (banco da API PHP)
+#   - PostgreSQL Orthanc: postgres:16 (índice DICOM — separado do MySQL)
+#   - PHP/API:            build local (./api/Dockerfile)
+#
+# FASE 2 — Migração SQLite → PostgreSQL:
+#   Ver: scripts/migrate-sqlite-to-postgres.sh
+#   Ver: MIGRATION.md
 # =============================================================================
 
 networks:
@@ -51,6 +57,7 @@ services:
   # MySQL 8.0 — banco de dados da API VOXEL PACS
   # O sistema PHP usa MySQL (conforme .env.example do voxelpacs)
   # Armazena: dados da aplicação (exames, usuários, tenants, etc.)
+  # NÃO compartilha banco com o PostgreSQL do Orthanc
   # ---------------------------------------------------------------------------
   mysql:
     image: mysql:8.0
@@ -84,22 +91,60 @@ services:
         max-file: "3"
 
   # ---------------------------------------------------------------------------
-  # Orthanc — servidor DICOM + DICOMweb
-  # Imagem: osimis/orthanc (inclui plugins DICOMweb)
-  # Armazena: arquivos DICOM em storage/dicom
+  # PostgreSQL 16 — índice DICOM do Orthanc (Fase 2)
+  # Armazena: metadados DICOM (UIDs, hierarquia, tags) — NÃO os arquivos binários
+  # Os arquivos DICOM ficam no filesystem: ../storage/dicom
+  # NÃO compartilha banco com o MySQL da API PHP
+  # NÃO expõe porta externamente — apenas rede interna Docker
+  # ---------------------------------------------------------------------------
+  postgres-orthanc:
+    image: postgres:16
+    container_name: voxelpacs-postgres-orthanc
+    restart: always
+    environment:
+      POSTGRES_DB: orthanc_voxel
+      POSTGRES_USER: orthanc_user
+      POSTGRES_PASSWORD: ${POSTGRES_ORTHANC_PASSWORD:?Defina POSTGRES_ORTHANC_PASSWORD no .env}
+      TZ: ${TIMEZONE:-America/Sao_Paulo}
+    volumes:
+      - ../postgres-orthanc/data:/var/lib/postgresql/data
+    networks:
+      - voxelpacs
+    # PostgreSQL NÃO expõe porta externamente — apenas rede interna Docker
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orthanc_user -d orthanc_voxel"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Orthanc 1.12.2 — servidor DICOM + DICOMweb
+  # Imagem: osimis/orthanc (inclui plugins DICOMweb + PostgreSQL)
+  # Índice: PostgreSQL 16 (container postgres-orthanc)
+  # Storage: filesystem (../storage/dicom) — NÃO no PostgreSQL
   # NUNCA exposto externamente — apenas via proxy Nginx (/dicom-web, /wado)
   # ---------------------------------------------------------------------------
   orthanc:
     image: osimis/orthanc:24.11.3
     container_name: voxelpacs-orthanc
     restart: always
+    depends_on:
+      postgres-orthanc:
+        condition: service_healthy
     environment:
       TZ: ${TIMEZONE:-America/Sao_Paulo}
     volumes:
-      # Configurações modulares do Orthanc
+      # Configurações modulares do Orthanc (carregadas via glob /etc/orthanc/*.json)
       - ../orthanc/orthanc.json:/etc/orthanc/orthanc.json:ro
       - ../orthanc/credentials.json:/etc/orthanc/credentials.json:ro
       - ../orthanc/dicomweb.json:/etc/orthanc/dicomweb.json:ro
+      - ../orthanc/postgresql.json:/etc/orthanc/postgresql.json:ro
       - ../orthanc/webviewer.json:/etc/orthanc/webviewer.json:ro
       - ../orthanc/worklists.json:/etc/orthanc/worklists.json:ro
       # Storage DICOM separado (facilita backup e migração)

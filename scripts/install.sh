@@ -7,10 +7,11 @@
 #   Internet → Nginx → OHIF + API VOXEL PACS → PostgreSQL + Orthanc → Storage DICOM
 #
 # Containers Docker:
-#   postgres        — banco de dados (índices Orthanc + dados API)
-#   orthanc         — servidor DICOM + DICOMweb (osimis/orthanc:24.11.3)
-#   ohif            — visualizador DICOM (ohif/app:v3.12.5)
-#   voxelpacs-api   — API REST (auth, tokens, RBAC, auditoria)
+#   mysql                  — banco de dados da API PHP (mysql:8.0)
+#   postgres-orthanc       — índice DICOM do Orthanc (postgres:16)
+#   orthanc                — servidor DICOM + DICOMweb (osimis/orthanc:24.11.3)
+#   ohif                   — visualizador DICOM (ohif/app:v3.12.5)
+#   voxelpacs-api          — API REST (auth, tokens, RBAC, auditoria)
 #
 # Nginx no host:
 #   Proxy reverso para todos os containers
@@ -50,7 +51,7 @@ ok ".env carregado"
 section "Validando configuração"
 ERRORS=0
 for VAR in DOMAIN CERTBOT_EMAIL ORTHANC_USERNAME ORTHANC_PASSWORD \
-           POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD; do
+           DB_PASSWORD MYSQL_ROOT_PASSWORD POSTGRES_ORTHANC_PASSWORD; do
     VAL=$(eval echo "\${${VAR}:-}")
     if [ -z "$VAL" ]; then
         echo -e "${RED}[ERROR]${NC} Variável ${BOLD}${VAR}${NC} não configurada."
@@ -68,6 +69,7 @@ mkdir -p \
     nginx \
     ohif/logo \
     postgres/data \
+    postgres-orthanc/data \
     storage/dicom \
     api \
     backups \
@@ -141,13 +143,12 @@ sed "s/DOMAIN_PLACEHOLDER/${DOMAIN}/g" orthanc/dicomweb.json > /tmp/dicomweb.jso
 cp /tmp/dicomweb.json orthanc/dicomweb.json
 ok "orthanc/dicomweb.json configurado para: ${DOMAIN}"
 
-# postgresql.json — substitui placeholders do banco
-sed -e "s/POSTGRES_DB_PLACEHOLDER/${POSTGRES_DB}/g" \
-    -e "s/POSTGRES_USER_PLACEHOLDER/${POSTGRES_USER}/g" \
-    -e "s/POSTGRES_PASSWORD_PLACEHOLDER/${POSTGRES_PASSWORD}/g" \
+# postgresql.json — substitui placeholder da senha do PostgreSQL Orthanc
+# O usuário e banco são fixos (orthanc_user / orthanc_voxel) — só a senha varia
+sed -e "s/POSTGRES_ORTHANC_PASSWORD_PLACEHOLDER/${POSTGRES_ORTHANC_PASSWORD}/g" \
     orthanc/postgresql.json > /tmp/postgresql.json
 cp /tmp/postgresql.json orthanc/postgresql.json
-ok "orthanc/postgresql.json configurado"
+ok "orthanc/postgresql.json configurado (PostgreSQL Orthanc)"
 
 # ── Gerar VirtualHost Nginx ───────────────────────────────────────────────────
 section "Gerando VirtualHost Nginx"
