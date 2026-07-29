@@ -16,7 +16,6 @@ backups/
 # Configurações geradas dinamicamente pelo install.sh
 # (contêm senhas — geradas a partir do .env)
 orthanc/credentials.json
-orthanc/postgresql.json
 
 # SSL (gerado pelo Certbot)
 ssl/

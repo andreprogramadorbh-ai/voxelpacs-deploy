@@ -1,0 +1,56 @@
+{
+  // ==========================================================================
+  // VOXEL PACS — orthanc/postgresql.json
+  // Plugin PostgreSQL para o Orthanc — índice DICOM
+  //
+  // Documentação: https://orthanc.uclouvain.be/book/plugins/postgresql.html
+  //
+  // ARQUITETURA:
+  //   - EnableIndex: true  → índice DICOM no PostgreSQL (metadados, UIDs, etc.)
+  //   - EnableStorage: false → arquivos DICOM no filesystem (volume Docker)
+  //     O storage no filesystem é mais eficiente para arquivos binários grandes.
+  //
+  // CONTAINER:
+  //   - postgres-orthanc (voxelpacs-postgres-orthanc) — PostgreSQL 16
+  //   - Banco: orthanc_voxel | Usuário: orthanc_user
+  //   - NÃO compartilha banco com o MySQL da API PHP
+  //
+  // FASE 2: Migração SQLite → PostgreSQL
+  //   Ver: scripts/migrate-sqlite-to-postgres.sh
+  //   Ver: MIGRATION.md
+  //
+  // FASE 3 (múltiplos Orthancs — PENDENTE):
+  //   Alterar Lock para false quando houver mais de um Orthanc conectado.
+  //
+  // PLACEHOLDERS (substituídos pelo install.sh via sed):
+  //   POSTGRES_ORTHANC_PASSWORD_PLACEHOLDER → valor do .env
+  // ==========================================================================
+  "PostgreSQL": {
+    // Hostname do container PostgreSQL (rede interna Docker)
+    "Host": "postgres-orthanc",
+    "Port": 5432,
+    "Database": "orthanc_voxel",
+    "Username": "orthanc_user",
+    "Password": "POSTGRES_ORTHANC_PASSWORD_PLACEHOLDER",
+
+    // Índice no PostgreSQL (metadados DICOM, UIDs, hierarquia)
+    "EnableIndex": true,
+
+    // Storage no filesystem (arquivos DICOM binários — NÃO no PostgreSQL)
+    // false = mais eficiente para arquivos grandes, facilita backup incremental
+    "EnableStorage": false,
+
+    // Lock exclusivo — true enquanto houver apenas 1 instância Orthanc
+    // Alterar para false na Fase 3 (múltiplos Orthancs / HA)
+    "Lock": true,
+
+    // Pool de conexões para o índice
+    "IndexConnectionsCount": 20,
+
+    // Modo de transação recomendado para single-writer
+    "TransactionMode": "ReadCommitted",
+
+    // Pool dinâmico de conexões (melhor performance sob carga variável)
+    "UseDynamicConnectionPool": true
+  }
+}
