@@ -1,70 +1,75 @@
 {
   // ==========================================================================
-  // VOXEL PACS — orthanc/orthanc.json
-  // Configuração principal do Orthanc 1.12.2 (osimis/orthanc:24.11.3)
-  // Documentação: https://book.orthanc-server.com/users/configuration.html
+  // VOXEL PACS — /etc/orthanc/orthanc.json
+  // Orthanc 1.12.2 — instalação nativa (systemd)
+  // Plugins: dicom-web, postgresql-index, worklists, housekeeper
   //
-  // Módulos carregados automaticamente pelo Orthanc (glob /etc/orthanc/*.json):
-  //   - orthanc.json     (este arquivo — configuração principal)
-  //   - credentials.json (usuários e senhas — gerado pelo install.sh)
-  //   - dicomweb.json    (plugin DICOMweb — rotas /dicom-web e /wado)
-  //   - postgresql.json  (plugin PostgreSQL — índice DICOM)
-  //   - webviewer.json   (plugin WebViewer — desativado em produção)
-  //   - worklists.json   (plugin Worklists — desativado em produção)
+  // FASE 1 (Segurança): hardening aplicado em 2026-07-30
+  // FASE 2 (PostgreSQL): já ativo via /etc/orthanc/postgresql.json
+  //   EnableIndex=true, EnableStorage=false
+  //   Host=127.0.0.1, DB=orthanc, User=orthanc
   //
-  // FASE 1 (Segurança): adicionadas configurações de hardening
-  // FASE 2 (PostgreSQL): postgresql.json carregado automaticamente via glob
-  //
-  // Fase 3 (Gateway — PENDENTE): DicomCheckCalledAet e DicomCheckCallingAet
-  //   serão habilitados após configuração do gateway DICOM. Mantidos como
-  //   false por ora para não quebrar clientes existentes.
+  // Storage: /var/lib/orthanc/db-v6 (38GB, 15.746 instâncias, 202 estudos)
+  // Fase 3 (Gateway — PENDENTE): DicomCheckCalledAet/CallingAet
   // ==========================================================================
 
   // ── Identidade ─────────────────────────────────────────────────────────────
-  "Name": "VOXELPACS",
+  "Name": "VOXEL PACS",
   "AETitle": "VOXELSRVPACS",
 
+  // ── Storage ────────────────────────────────────────────────────────────────
+  "StorageDirectory": "/var/lib/orthanc/db-v6",
+  "IndexDirectory": "/var/lib/orthanc/db-v6",
+
   // ── Portas ─────────────────────────────────────────────────────────────────
-  // Porta DICOM C-STORE (não exposta externamente — apenas interna Docker)
-  "DicomPort": 4242,
-  // Porta HTTP (não exposta externamente — apenas interna Docker)
   "HttpPort": 8042,
+  "DicomPort": 4242,
 
   // ── Acesso remoto e autenticação ───────────────────────────────────────────
-  // Aceitar conexões de qualquer origem interna (Docker network)
   "RemoteAccessAllowed": true,
   "AuthenticationEnabled": true,
 
   // ── Plugins ────────────────────────────────────────────────────────────────
-  "Plugins": [
-    "/usr/share/orthanc/plugins"
-  ],
-
-  // ── Storage ────────────────────────────────────────────────────────────────
-  // Armazenamento DICOM (volume Docker → /storage/dicom no host)
-  "StorageDirectory": "/var/lib/orthanc/db",
-  "StorageCompression": false,
+  "Plugins": ["/usr/share/orthanc/plugins"],
 
   // ── Performance ────────────────────────────────────────────────────────────
-  // Máximo de conexões simultâneas
   "HttpThreadsCount": 50,
-  // Keep-alive e TCP no-delay para melhor performance em redes locais
   "KeepAlive": true,
   "TcpNoDelay": true,
 
+  // ── CORS (necessário para OHIF) ────────────────────────────────────────────
+  "HttpHeaders": {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS"
+  },
+
   // ── DICOM ──────────────────────────────────────────────────────────────────
+  "DicomAet": "VOXELSRVPACS",
+  "DicomPort": 4242,
   "DicomScuTimeout": 10,
-  // Servidor DICOM explicitamente habilitado
   "DicomServerEnabled": true,
-  // true = aceita SOP Classes desconhecidas (equipamentos antigos/proprietários)
   "UnknownSopClassAccepted": true,
 
   // ATENÇÃO — Fase 3 (Gateway — PENDENTE):
-  // Habilitar DicomCheckCalledAet e DicomCheckCallingAet após configurar o
-  // gateway DICOM e cadastrar todos os modalities em DicomModalities.
-  // Mantidos como false por ora para não quebrar clientes existentes.
+  // Habilitar após configurar gateway DICOM e cadastrar todos os modalities.
   "DicomCheckCalledAet": false,
   "DicomCheckCallingAet": false,
+
+  // ── Modalities cadastradas ─────────────────────────────────────────────────
+  "DicomModalities": {
+    "pacsFIR": {
+      "AET": "pacsFIR",
+      "Host": "177.136.206.165",
+      "Port": 2104,
+      "Manufacturer": "Generic",
+      "AllowEcho": true,
+      "AllowFind": true,
+      "AllowGet": true,
+      "AllowMove": true,
+      "AllowStore": true
+    }
+  },
 
   // ── Segurança — Fase 1 ─────────────────────────────────────────────────────
   // Limitar resultados de busca para evitar DoS e sobrecarga de memória
@@ -87,14 +92,10 @@
   "OverwriteInstances": false,
 
   // ── Logs ───────────────────────────────────────────────────────────────────
+  "HttpDescribeErrors": true,
+  "HttpVerbose": false,
   "LogLevel": "default",
 
-  // ── SSL (desabilitado — SSL é gerenciado pelo Nginx no host) ───────────────
-  "HttpsCACertificates": "",
-  "SslEnabled": false,
-
-  // ── Worklists (desabilitado — gerenciado pela API PHP) ─────────────────────
-  "Worklists": {
-    "Enable": false
-  }
+  // ── SSL (gerenciado pelo Nginx no host) ────────────────────────────────────
+  "SslEnabled": false
 }
