@@ -39,7 +39,7 @@
 
   // ── CORS (necessário para OHIF) ────────────────────────────────────────────
   "HttpHeaders": {
-    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Origin": "https://view.voxelpacs.com.br",
     "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept",
     "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS"
   },
