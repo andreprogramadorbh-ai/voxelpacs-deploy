@@ -83,3 +83,89 @@ window.config = {
     { 'ohif.appTitle': { value: 'Voxel View' } },
   ],
 };
+
+
+/**
+ * VOXEL VIEW — Personalização de marca do menu de perfil
+ *
+ * O OHIF v3.12.5 cria a opção About de forma incondicional no menu de
+ * perfil. A versão em container não fornece uma chave de configuração para
+ * removê-la. Esta guarda atua somente no DOM de menus Radix UI, preserva
+ * Preferências e todos os controles clínicos, e impede a abertura visual do
+ * modal que exibe informações do fornecedor.
+ *
+ * Não altera os arquivos minificados do OHIF nem remove avisos de licença
+ * do software distribuído.
+ */
+(function installVoxelViewBrandingGuard() {
+  const ABOUT_LABELS = new Set(['about', 'sobre', 'quem somos']);
+  const HIDDEN_CLASS = 'voxel-view-hide-vendor-about';
+
+  function normalise(value) {
+    return (value || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLocaleLowerCase('pt-BR');
+  }
+
+  function isAboutLabel(value) {
+    return ABOUT_LABELS.has(normalise(value));
+  }
+
+  function hideAboutOption() {
+    const candidates = document.querySelectorAll(
+      '[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [data-radix-collection-item], [data-radix-popper-content-wrapper] button'
+    );
+
+    candidates.forEach(candidate => {
+      const label = candidate.getAttribute('aria-label') || candidate.textContent;
+      const inMenu = candidate.closest('[role="menu"], [data-radix-popper-content-wrapper]');
+
+      if (!inMenu || !isAboutLabel(label)) {
+        return;
+      }
+
+      const menuItem = candidate.closest('[role="menuitem"], button, li') || candidate;
+      menuItem.classList.add(HIDDEN_CLASS);
+      menuItem.setAttribute('aria-hidden', 'true');
+      menuItem.setAttribute('tabindex', '-1');
+    });
+  }
+
+  function installStyle() {
+    if (document.getElementById('voxel-view-branding-guard-style')) {
+      return;
+    }
+
+    const style = document.createElement('style');
+    style.id = 'voxel-view-branding-guard-style';
+    style.textContent = `.${HIDDEN_CLASS} { display: none !important; }`;
+    document.head.appendChild(style);
+  }
+
+  function start() {
+    installStyle();
+    hideAboutOption();
+
+    let scheduled = false;
+    const observer = new MutationObserver(() => {
+      if (scheduled) {
+        return;
+      }
+
+      scheduled = true;
+      window.requestAnimationFrame(() => {
+        scheduled = false;
+        hideAboutOption();
+      });
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start, { once: true });
+  } else {
+    start();
+  }
+})();
