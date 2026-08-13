@@ -32,6 +32,12 @@ window.config = {
     'multipart/related; type=application/octet-stream; transfer-syntax=1.2.840.10008.1.2.1',
   ],
   omitQuotationForMultipartRequest: true,
+  // Consumido exclusivamente pela extensão @voxel/extension-measurement-adapter.
+  // A autorização é um bearer token efêmero no fragmento da URL, não uma credencial fixa.
+  voxelMeasurementAdapter: {
+    endpoint: 'https://server.voxelpacs.com.br/api/viewer/measurements',
+    debounceMs: 600,
+  },
   dataSources: [
     {
       namespace: '@ohif/extension-default.dataSourcesModule.dicomweb',

@@ -1,0 +1,16 @@
+{
+  "name": "@voxel/extension-measurement-adapter",
+  "version": "1.0.0",
+  "description": "VOXEL PACS adapter for OHIF MeasurementService snapshots",
+  "private": true,
+  "license": "UNLICENSED",
+  "main": "src/index.ts",
+  "module": "src/index.ts",
+  "types": "src/index.ts",
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "@ohif/core": "3.12.5"
+  }
+}

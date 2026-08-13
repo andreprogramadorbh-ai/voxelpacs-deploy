@@ -175,7 +175,14 @@ services:
   # Acesso: apenas via Nginx (127.0.0.1:3000)
   # ---------------------------------------------------------------------------
   ohif:
-    image: ohif/app:v3.12.5
+    # Build reproduzível: OHIF v3.12.5 + @voxel/extension-measurement-adapter.
+    # Não substituir por ohif/app:latest, pois o adapter depende da API v3.12.5.
+    build:
+      context: ../ohif-custom
+      dockerfile: Dockerfile
+      args:
+        OHIF_GIT_REF: v3.12.5
+    image: voxelpacs-ohif:3.12.5-measurements
     container_name: voxelpacs-ohif
     restart: always
     environment:
