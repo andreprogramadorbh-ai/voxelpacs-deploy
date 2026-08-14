@@ -196,7 +196,7 @@ class DeliveryWorker:
         dataset.SeriesInstanceUID = generate_uid()
         dataset.StudyDate = normalize_dicom_date(str(payload.get("study_date") or ""))
         dataset.StudyTime = normalize_dicom_time(str(payload.get("study_time") or ""))
-        dataset.AccessionNumber = str(payload.get("accession_number") or "")
+        dataset.AccessionNumber = normalize_dicom_sh(str(payload.get("accession_number") or ""))
         dataset.ReferringPhysicianName = ""
         dataset.StudyID = ""
         dataset.SeriesNumber = 999
@@ -271,6 +271,10 @@ def normalize_dicom_date(value: str) -> str:
 
 def normalize_dicom_time(value: str) -> str:
     return "".join(char for char in value if char.isdigit())[:6]
+
+
+def normalize_dicom_sh(value: str) -> str:
+    return value.strip()[:16]
 
 
 def secrets_compare(left: str, right: str) -> bool:
