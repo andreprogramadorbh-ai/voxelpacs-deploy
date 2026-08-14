@@ -67,4 +67,8 @@ with tempfile.TemporaryDirectory() as temp_dir:
     assert restored.EncapsulatedDocument == pdf
     assert restored.EncapsulatedDocumentLength == len(pdf)
 
+worker_source = (root / "worker.py").read_text(encoding="utf-8")
+assert '["storescu", "-v", "-aec"' in worker_source
+assert 'for part in (result.stdout, result.stderr)' in worker_source
+
 print("[OK] DICOM Encapsulated PDF válido, sem transmissão externa")

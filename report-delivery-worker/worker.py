@@ -150,15 +150,21 @@ class DeliveryWorker:
             dicom_path = Path(temporary_directory) / "report.pdf.dcm"
             dataset.save_as(str(dicom_path), enforce_file_format=True)
             result = subprocess.run(
-                ["storescu", "-aec", called_ae, "-aet", calling_ae, host, str(port), str(dicom_path)],
+                ["storescu", "-v", "-aec", called_ae, "-aet", calling_ae, host, str(port), str(dicom_path)],
                 capture_output=True,
                 text=True,
                 timeout=timeout_seconds,
                 check=False,
             )
             if result.returncode != 0:
-                detail = (result.stderr or result.stdout or "erro sem detalhe").strip().replace("\n", " ")
-                raise RuntimeError(f"C-STORE recusado pelo PACS ({result.returncode}): {detail[:400]}")
+                diagnostic_parts = [
+                    part.strip()
+                    for part in (result.stdout, result.stderr)
+                    if isinstance(part, str) and part.strip()
+                ]
+                detail = " | ".join(diagnostic_parts) or "erro sem detalhe"
+                detail = " ".join(detail.split())
+                raise RuntimeError(f"C-STORE recusado pelo PACS ({result.returncode}): {detail[:1200]}")
 
         metadata.update({
             "mode": "dicom_pdf",
