@@ -23,6 +23,7 @@ from typing import Any
 
 import requests
 from pydicom.dataset import Dataset, FileDataset
+from pydicom.sequence import Sequence
 from pydicom.uid import EncapsulatedPDFStorage, ExplicitVRLittleEndian, PYDICOM_IMPLEMENTATION_UID, generate_uid
 
 API_BASE_URL = os.environ.get("DELIVERY_HUB_API_URL", "https://server.voxelpacs.com.br").rstrip("/")
@@ -31,6 +32,7 @@ WORKER_ID = os.environ.get("DELIVERY_HUB_WORKER_ID", f"delivery-worker:{socket.g
 POLL_SECONDS = max(1, int(os.environ.get("DELIVERY_HUB_POLL_SECONDS", "5")))
 DRY_RUN = os.environ.get("DELIVERY_HUB_DRY_RUN", "true").lower() in {"1", "true", "yes"}
 DICOM_PDF_ENABLED = os.environ.get("DELIVERY_HUB_DICOM_PDF_ENABLED", "false").lower() in {"1", "true", "yes"}
+DICOMWEB_BASE_URL = os.environ.get("DELIVERY_HUB_DICOMWEB_URL", "https://dicom.voxelpacs.com.br/dicom-web").rstrip("/")
 
 logging.basicConfig(
     level=os.environ.get("DELIVERY_HUB_LOG_LEVEL", "INFO").upper(),
@@ -140,7 +142,8 @@ class DeliveryWorker:
             raise RuntimeError("AE Titles DICOM contêm caracteres inválidos.")
 
         pdf, metadata = self.download_pdf_artifact(job)
-        dataset, sop_instance_uid = self.build_encapsulated_pdf_dataset(job, pdf)
+        source_identity = self.fetch_original_study_identity(str(metadata.get("study_instance_uid") or ""))
+        dataset, sop_instance_uid = self.build_encapsulated_pdf_dataset(job, pdf, source_identity)
         timeout_seconds = max(5, min(120, int(job.get("timeout_seconds") or 30)))
 
         with tempfile.TemporaryDirectory(prefix="voxel-dicom-pdf-") as temporary_directory:
@@ -168,7 +171,54 @@ class DeliveryWorker:
         })
         return f"dicom:{sop_instance_uid}", metadata
 
-    def build_encapsulated_pdf_dataset(self, job: dict[str, Any], pdf: bytes) -> tuple[FileDataset, str]:
+    def fetch_original_study_identity(self, study_uid: str) -> dict[str, str]:
+        if not study_uid:
+            raise RuntimeError("StudyInstanceUID ausente para consulta DICOMweb do estudo original.")
+        response = requests.get(
+            f"{DICOMWEB_BASE_URL}/studies/{study_uid}/metadata",
+            headers={"Accept": "application/dicom+json", "User-Agent": "VOXEL-Report-Delivery-Worker/1.0"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        metadata = response.json()
+        item = metadata[0] if isinstance(metadata, list) and metadata else metadata
+        if not isinstance(item, dict):
+            raise RuntimeError("DICOMweb não retornou metadados válidos do estudo original.")
+
+        def value(tag: str) -> str:
+            entry = item.get(tag, {})
+            values = entry.get("Value", []) if isinstance(entry, dict) else []
+            if not values:
+                return ""
+            raw = values[0]
+            if isinstance(raw, dict):
+                return str(raw.get("Alphabetic") or "")
+            return str(raw)
+
+        identity = {
+            "patient_name": value("00100010"),
+            "patient_id": value("00100020"),
+            "patient_birth_date": value("00100030"),
+            "patient_sex": value("00100040"),
+            "issuer_of_patient_id": value("00100021"),
+            "study_date": value("00080020"),
+            "study_time": value("00080030"),
+            "accession_number": value("00080050"),
+            "study_id": value("00200010"),
+            "institution_name": value("00080080"),
+            "study_description": value("00081030"),
+            "referring_physician_name": value("00080090"),
+        }
+        if not identity["patient_id"] or not identity["patient_name"]:
+            raise RuntimeError("Metadados DICOM originais incompletos para devolutiva clínica.")
+        return identity
+
+    def build_encapsulated_pdf_dataset(
+        self,
+        job: dict[str, Any],
+        pdf: bytes,
+        source_identity: dict[str, str] | None = None,
+    ) -> tuple[FileDataset, str]:
         payload = job.get("payload") or {}
         if not isinstance(payload, dict):
             raise RuntimeError("Payload clínico inválido para o artefato DICOM.")
@@ -188,27 +238,44 @@ class DeliveryWorker:
         dataset.SpecificCharacterSet = "ISO_IR 192"
         dataset.SOPClassUID = EncapsulatedPDFStorage
         dataset.SOPInstanceUID = sop_instance_uid
-        dataset.PatientName = str(payload.get("patient_name") or "")
-        dataset.PatientID = str(payload.get("patient_id") or "")
-        dataset.PatientBirthDate = normalize_dicom_date(str(payload.get("patient_birth_date") or ""))
-        dataset.PatientSex = str(payload.get("patient_sex") or "")[:1].upper()
+        identity = source_identity or {}
+        dataset.PatientName = str(identity.get("patient_name") or payload.get("patient_name") or "")
+        dataset.PatientID = str(identity.get("patient_id") or payload.get("patient_id") or "")
+        issuer_of_patient_id = str(identity.get("issuer_of_patient_id") or payload.get("issuer_of_patient_id") or "").strip()
+        if issuer_of_patient_id:
+            dataset.IssuerOfPatientID = issuer_of_patient_id[:64]
+        dataset.PatientBirthDate = normalize_dicom_date(str(identity.get("patient_birth_date") or payload.get("patient_birth_date") or ""))
+        dataset.PatientSex = str(identity.get("patient_sex") or payload.get("patient_sex") or "")[:1].upper()
         dataset.StudyInstanceUID = study_uid
         dataset.SeriesInstanceUID = generate_uid()
-        dataset.StudyDate = normalize_dicom_date(str(payload.get("study_date") or ""))
-        dataset.StudyTime = normalize_dicom_time(str(payload.get("study_time") or ""))
-        dataset.AccessionNumber = normalize_dicom_sh(str(payload.get("accession_number") or ""))
-        dataset.ReferringPhysicianName = ""
-        dataset.StudyID = ""
+        dataset.StudyDate = normalize_dicom_date(str(identity.get("study_date") or payload.get("study_date") or ""))
+        dataset.StudyTime = normalize_dicom_time(str(identity.get("study_time") or payload.get("study_time") or ""))
+        dataset.AccessionNumber = normalize_dicom_sh(str(identity.get("accession_number") or payload.get("accession_number") or ""))
+        dataset.ReferringPhysicianName = str(identity.get("referring_physician_name") or "")
+        dataset.StudyID = normalize_dicom_sh(str(identity.get("study_id") or ""))
+        dataset.InstitutionName = str(identity.get("institution_name") or "")
+        dataset.StudyDescription = str(identity.get("study_description") or "")
         dataset.SeriesNumber = 999
         dataset.InstanceNumber = 1
         dataset.Modality = "DOC"
         dataset.SeriesDescription = "Laudo Médico"
+        dataset.Manufacturer = "VOXEL PACS"
+        dataset.ManufacturerModelName = "VOXEL Report Delivery Hub"
+        dataset.SoftwareVersions = "1.0"
+        dataset.ConversionType = "WSD"
+        dataset.SecondaryCaptureDeviceManufacturer = "VOXEL PACS"
+        dataset.SecondaryCaptureDeviceSoftwareVersions = "1.0"
         dataset.DocumentTitle = "Laudo Radiológico"
+        dataset.ConceptNameCodeSequence = Sequence([])
         dataset.ContentDate = now.strftime("%Y%m%d")
         dataset.ContentTime = now.strftime("%H%M%S")
+        dataset.AcquisitionDateTime = now.strftime("%Y%m%d%H%M%S+0000")
+        dataset.InstanceCreationDate = now.strftime("%Y%m%d")
+        dataset.InstanceCreationTime = now.strftime("%H%M%S")
         dataset.BurnedInAnnotation = "NO"
         dataset.MIMETypeOfEncapsulatedDocument = "application/pdf"
         dataset.EncapsulatedDocument = pdf
+        dataset.EncapsulatedDocumentLength = len(pdf)
         return dataset, sop_instance_uid
 
     def send_https_webhook(self, job: dict[str, Any]) -> tuple[str, dict[str, Any]]:

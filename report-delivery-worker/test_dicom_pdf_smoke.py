@@ -31,12 +31,29 @@ job = {
     }
 }
 pdf = b"%PDF-1.4\n% Homologacao VOXEL PACS\n1 0 obj\n<<>>\nendobj\n%%EOF\n"
-dataset, uid = worker.build_encapsulated_pdf_dataset(job, pdf)
+source_identity = {
+    "patient_name": "TESTE^HOMOLOGACAO",
+    "patient_id": "HOMOLOGACAO-001",
+    "issuer_of_patient_id": "inova_iss",
+    "patient_birth_date": "19800102",
+    "patient_sex": "O",
+    "study_date": "20260814",
+    "study_time": "103000",
+    "accession_number": "HOMOLOG-001",
+}
+dataset, uid = worker.build_encapsulated_pdf_dataset(job, pdf, source_identity)
 
 assert str(dataset.SOPClassUID) == str(EncapsulatedPDFStorage)
 assert str(dataset.StudyInstanceUID) == job["payload"]["study_instance_uid"]
 assert dataset.PatientID == "HOMOLOGACAO-001"
+assert dataset.IssuerOfPatientID == "inova_iss"
+assert dataset.ConversionType == "WSD"
+assert dataset.Manufacturer == "VOXEL PACS"
+assert dataset.SecondaryCaptureDeviceManufacturer == "VOXEL PACS"
+assert dataset.AcquisitionDateTime
+assert len(dataset.ConceptNameCodeSequence) == 0
 assert dataset.EncapsulatedDocument == pdf
+assert dataset.EncapsulatedDocumentLength == len(pdf)
 assert dataset.MIMETypeOfEncapsulatedDocument == "application/pdf"
 assert str(dataset.SOPInstanceUID) == uid
 
@@ -45,6 +62,9 @@ with tempfile.TemporaryDirectory() as temp_dir:
     dataset.save_as(path, enforce_file_format=True)
     restored = dcmread(path)
     assert str(restored.SOPClassUID) == str(EncapsulatedPDFStorage)
+    assert restored.IssuerOfPatientID == "inova_iss"
+    assert restored.ConversionType == "WSD"
     assert restored.EncapsulatedDocument == pdf
+    assert restored.EncapsulatedDocumentLength == len(pdf)
 
 print("[OK] DICOM Encapsulated PDF válido, sem transmissão externa")
