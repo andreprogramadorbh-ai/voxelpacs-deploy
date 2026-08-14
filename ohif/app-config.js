@@ -90,6 +90,24 @@ window.config = {
   ],
 };
 
+/**
+ * Enquanto o adapter de medições estiver desativado, remove qualquer
+ * fragmento de credencial legado antes da inicialização do viewer. O fragmento
+ * não é enviado ao servidor, e a remoção preserva eventuais âncoras restantes.
+ */
+(function removeDisabledMeasurementTokenFromUrl() {
+  const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : '';
+  const values = new URLSearchParams(hash);
+
+  if (!values.has('voxel_measurement_token')) {
+    return;
+  }
+
+  values.delete('voxel_measurement_token');
+  const remainingHash = values.toString();
+  const cleanUrl = `${window.location.pathname}${window.location.search}${remainingHash ? `#${remainingHash}` : ''}`;
+  window.history.replaceState({}, document.title, cleanUrl);
+})();
 
 /**
  * VOXEL VIEW — Personalização de marca do menu de perfil
