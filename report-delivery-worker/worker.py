@@ -40,6 +40,8 @@ class DeliveryWorker:
                 "Authorization": f"Bearer {WORKER_TOKEN}",
                 "X-Voxel-Worker-Id": WORKER_ID,
                 "Accept": "application/json",
+                "Content-Type": "application/json",
+                "User-Agent": "VOXEL-Report-Delivery-Worker/1.0",
             }
         )
 
@@ -52,7 +54,9 @@ class DeliveryWorker:
         return payload
 
     def lease(self) -> dict[str, Any] | None:
-        return self.request("POST", "/api/report-delivery/lease").get("job")
+        # O corpo JSON explícito mantém compatibilidade com a política ModSecurity
+        # da hospedagem compartilhada, que rejeita POST vazio neste endpoint.
+        return self.request("POST", "/api/report-delivery/lease", json={}).get("job")
 
     def complete(self, job_id: int, reference: str, metadata: dict[str, Any]) -> None:
         self.request(
@@ -94,7 +98,12 @@ class DeliveryWorker:
             raise RuntimeError("Destino HTTPS exige configuration_json.url usando HTTPS.")
 
         secret = json.loads(job.get("configuration_secret") or "{}")
-        headers = {"Content-Type": "application/json", "X-Voxel-Delivery-Id": str(job["id"])}
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "VOXEL-Report-Delivery-Worker/1.0",
+            "X-Voxel-Delivery-Id": str(job["id"]),
+        }
         if isinstance(secret.get("bearer_token"), str) and secret["bearer_token"]:
             headers["Authorization"] = f"Bearer {secret['bearer_token']}"
 
@@ -103,7 +112,9 @@ class DeliveryWorker:
             "delivery_id": job.get("id"),
             "payload": job.get("payload", {}),
         }
-        response = self.session.post(endpoint, json=body, headers=headers, timeout=int(job.get("timeout_seconds") or 30))
+        # Não reutilizar self.session: ela possui o bearer exclusivo da API interna
+        # e esse token jamais deve ser enviado a um endpoint de cliente.
+        response = requests.post(endpoint, json=body, headers=headers, timeout=int(job.get("timeout_seconds") or 30))
         if response.status_code < 200 or response.status_code >= 300:
             raise RuntimeError(f"Destino HTTPS respondeu HTTP {response.status_code}.")
 
