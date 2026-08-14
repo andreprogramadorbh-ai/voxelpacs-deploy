@@ -143,7 +143,14 @@ class DeliveryWorker:
 
         pdf, metadata = self.download_pdf_artifact(job)
         source_identity = self.fetch_original_study_identity(str(metadata.get("study_instance_uid") or ""))
-        dataset, sop_instance_uid = self.build_encapsulated_pdf_dataset(job, pdf, source_identity)
+        patient_id_normalization = str(config.get("patient_id_normalization") or "").strip()
+        dataset, sop_instance_uid = self.build_encapsulated_pdf_dataset(
+            job,
+            pdf,
+            source_identity,
+            patient_id_normalization=patient_id_normalization,
+        )
+        source_patient_id = str(source_identity.get("patient_id") or "").strip()
         timeout_seconds = max(5, min(120, int(job.get("timeout_seconds") or 30)))
 
         with tempfile.TemporaryDirectory(prefix="voxel-dicom-pdf-") as temporary_directory:
@@ -174,6 +181,8 @@ class DeliveryWorker:
             "calling_ae": calling_ae,
             "remote_host": host,
             "remote_port": port,
+            "patient_id_normalization": patient_id_normalization or "none",
+            "patient_id_normalized": bool(source_patient_id and str(dataset.PatientID) != source_patient_id),
         })
         return f"dicom:{sop_instance_uid}", metadata
 
@@ -224,6 +233,7 @@ class DeliveryWorker:
         job: dict[str, Any],
         pdf: bytes,
         source_identity: dict[str, str] | None = None,
+        patient_id_normalization: str = "",
     ) -> tuple[FileDataset, str]:
         payload = job.get("payload") or {}
         if not isinstance(payload, dict):
@@ -246,7 +256,8 @@ class DeliveryWorker:
         dataset.SOPInstanceUID = sop_instance_uid
         identity = source_identity or {}
         dataset.PatientName = str(identity.get("patient_name") or payload.get("patient_name") or "")
-        dataset.PatientID = str(identity.get("patient_id") or payload.get("patient_id") or "")
+        source_patient_id = str(identity.get("patient_id") or payload.get("patient_id") or "")
+        dataset.PatientID = normalize_patient_id(source_patient_id, patient_id_normalization)
         issuer_of_patient_id = str(identity.get("issuer_of_patient_id") or payload.get("issuer_of_patient_id") or "").strip()
         if issuer_of_patient_id:
             dataset.IssuerOfPatientID = issuer_of_patient_id[:64]
@@ -336,6 +347,25 @@ class DeliveryWorker:
             except Exception as exc:
                 LOGGER.exception("falha inesperada do worker: %s", exc)
                 time.sleep(max(POLL_SECONDS, 15))
+
+
+def normalize_patient_id(value: str, strategy: str = "") -> str:
+    """Aplica compatibilidade de Patient ID somente quando o destino a habilitou."""
+    patient_id = value.strip()
+    normalized_strategy = strategy.strip().lower()
+    if normalized_strategy in {"", "none"}:
+        return patient_id
+    if normalized_strategy == "vue_prefix_before_triple_dollar":
+        prefix, separator, suffix = patient_id.partition("$$$")
+        if not separator:
+            return patient_id
+        prefix = prefix.strip()
+        if not prefix:
+            raise RuntimeError("A normalização Vue PACS não encontrou um Patient ID base válido antes de $$$.")
+        if not suffix.strip():
+            raise RuntimeError("A normalização Vue PACS encontrou um separador $$$ sem sufixo de origem.")
+        return prefix
+    raise RuntimeError("Estratégia de normalização de Patient ID não suportada para o destino DICOM.")
 
 
 def normalize_dicom_date(value: str) -> str:

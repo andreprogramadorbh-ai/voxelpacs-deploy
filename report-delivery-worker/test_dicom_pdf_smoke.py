@@ -42,10 +42,25 @@ source_identity = {
     "accession_number": "HOMOLOG-001",
 }
 dataset, uid = worker.build_encapsulated_pdf_dataset(job, pdf, source_identity)
+normalized_identity = {**source_identity, "patient_id": "HOMOLOGACAO-001$$$ORIGEM"}
+normalized_dataset, _ = worker.build_encapsulated_pdf_dataset(
+    job,
+    pdf,
+    normalized_identity,
+    patient_id_normalization="vue_prefix_before_triple_dollar",
+)
 
 assert str(dataset.SOPClassUID) == str(EncapsulatedPDFStorage)
 assert str(dataset.StudyInstanceUID) == job["payload"]["study_instance_uid"]
 assert dataset.PatientID == "HOMOLOGACAO-001"
+assert normalized_dataset.PatientID == "HOMOLOGACAO-001"
+assert normalized_dataset.IssuerOfPatientID == "inova_iss"
+assert worker.build_encapsulated_pdf_dataset(job, pdf, normalized_identity)[0].PatientID == "HOMOLOGACAO-001$$$ORIGEM"
+try:
+    worker.build_encapsulated_pdf_dataset(job, pdf, normalized_identity, patient_id_normalization="invalida")
+    raise AssertionError("Estratégia inválida deveria falhar")
+except RuntimeError as exc:
+    assert "não suportada" in str(exc)
 assert dataset.IssuerOfPatientID == "inova_iss"
 assert dataset.ConversionType == "WSD"
 assert dataset.Manufacturer == "VOXEL PACS"
@@ -70,5 +85,6 @@ with tempfile.TemporaryDirectory() as temp_dir:
 worker_source = (root / "worker.py").read_text(encoding="utf-8")
 assert '["storescu", "-v", "-aec"' in worker_source
 assert 'for part in (result.stdout, result.stderr)' in worker_source
+assert 'vue_prefix_before_triple_dollar' in worker_source
 
 print("[OK] DICOM Encapsulated PDF válido, sem transmissão externa")
