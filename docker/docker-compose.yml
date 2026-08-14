@@ -175,14 +175,10 @@ services:
   # Acesso: apenas via Nginx (127.0.0.1:3000)
   # ---------------------------------------------------------------------------
   ohif:
-    # Build reproduzível: OHIF v3.12.5 + @voxel/extension-measurement-adapter.
-    # Não substituir por ohif/app:latest, pois o adapter depende da API v3.12.5.
-    build:
-      context: ../ohif-custom
-      dockerfile: Dockerfile
-      args:
-        OHIF_GIT_REF: v3.12.5
-    image: voxelpacs-ohif:3.12.5-measurements
+    # A extensão de medições permanece versionada em ../ohif-custom, mas está
+    # temporariamente desativada: a imagem customizada bloqueou o carregamento
+    # de estudos. Usar exclusivamente a imagem clínica validada até a correção.
+    image: ohif/app:v3.12.5
     container_name: voxelpacs-ohif
     restart: always
     environment:
