@@ -18,9 +18,11 @@ WORKDIR /usr/src/ohif
 COPY pluginConfig.json /usr/src/ohif/platform/app/pluginConfig.json
 COPY extensions/voxel-measurement-adapter /usr/src/ohif/extensions/voxel-measurement-adapter
 
-RUN bun pm cache rm \
-    && bun install \
-    && bun add ajv@8.12.0
+# A extensão privada passa a integrar o workspace; por isso o lockfile da tag
+# upstream é atualizado somente dentro da camada efêmera de build.
+RUN sed -i 's/frozenLockfile = true/frozenLockfile = false/' bunfig.toml \
+    && bun pm cache rm \
+    && bun install
 
 ENV QUICK_BUILD=true
 ENV APP_CONFIG=config/default.js
