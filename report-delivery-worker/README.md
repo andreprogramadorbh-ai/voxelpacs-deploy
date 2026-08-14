@@ -8,6 +8,7 @@ O arquivo `.env` deve começar com:
 
 ```env
 DELIVERY_HUB_DRY_RUN=true
+DELIVERY_HUB_DICOM_PDF_ENABLED=false
 ```
 
 Neste modo, o worker registra a passagem pela fila sem enviar dados clínicos a nenhum destino. A única finalidade é validar autenticação, leasing, idempotência, reprocessamento e auditoria.
@@ -45,7 +46,7 @@ Nunca versionar essa chave, enviá-la em e-mail, inseri-la em JSON de destino ou
 | Transporte | Estado do worker inicial |
 |---|---|
 | `https_webhook` | Implementado, mas só envia quando `DRY_RUN=false` e o destino HTTPS de homologação for explicitamente habilitado. |
-| `dicom_pdf` | Contrato e fila prontos; requer gerador de Encapsulated PDF e homologação C-STORE/Storage Commitment. |
+| `dicom_pdf` | Implementado com PDF gerado da versão imutável do laudo e C-STORE. Requer `DRY_RUN=false`, `DELIVERY_HUB_DICOM_PDF_ENABLED=true`, C-ECHO e C-STORE de homologação aprovados. |
 | `dicom_sr` | Contrato e fila prontos; requer mapeamento SR/TID 2000 e homologação do PACS. |
 | `hl7_oru` | Contrato e fila prontos; requer profile HL7 do RIS/HIS. |
 | `sftp` | Contrato e fila prontos; requer política de pasta, chave e manifesto por cliente. |
@@ -59,6 +60,6 @@ Nunca versionar essa chave, enviá-la em e-mail, inseri-la em JSON de destino ou
 5. Habilitar temporariamente a feature flag do Hub para criar um job de teste, sem dados de paciente reais quando possível.
 6. Validar no painel o job, a tentativa, a idempotência e a reexecução.
 7. Para HTTPS, homologar endpoint e resposta idempotente.
-8. Para DICOM, validar AEs, VPN, C-STORE, associação ao estudo e Storage Commitment.
+8. Para DICOM, validar AEs, VPN, C-ECHO, C-STORE de um PDF de teste, associação ao StudyInstanceUID e visualização no PACS. Manter `DELIVERY_HUB_DICOM_PDF_ENABLED=false` até o aceite técnico.
 9. Para SFTP, validar chave, diretório dedicado, arquivo temporário, hash e leitura do manifesto.
 10. Só após aceite clínico e técnico, liberar o destino conforme procedimento de produção aprovado.

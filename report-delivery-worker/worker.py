@@ -8,20 +8,29 @@ clientes. A ativação de qualquer destino exige homologação explícita.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import os
 import socket
+import subprocess
+import tempfile
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import requests
+from pydicom.dataset import Dataset, FileDataset
+from pydicom.uid import EncapsulatedPDFStorage, ExplicitVRLittleEndian, PYDICOM_IMPLEMENTATION_UID, generate_uid
 
 API_BASE_URL = os.environ.get("DELIVERY_HUB_API_URL", "https://server.voxelpacs.com.br").rstrip("/")
 WORKER_TOKEN = os.environ.get("VOXEL_REPORT_DELIVERY_WORKER_TOKEN", "")
 WORKER_ID = os.environ.get("DELIVERY_HUB_WORKER_ID", f"delivery-worker:{socket.gethostname()}")
 POLL_SECONDS = max(1, int(os.environ.get("DELIVERY_HUB_POLL_SECONDS", "5")))
 DRY_RUN = os.environ.get("DELIVERY_HUB_DRY_RUN", "true").lower() in {"1", "true", "yes"}
+DICOM_PDF_ENABLED = os.environ.get("DELIVERY_HUB_DICOM_PDF_ENABLED", "false").lower() in {"1", "true", "yes"}
 
 logging.basicConfig(
     level=os.environ.get("DELIVERY_HUB_LOG_LEVEL", "INFO").upper(),
@@ -85,11 +94,122 @@ class DeliveryWorker:
 
         if transport == "https_webhook":
             return self.send_https_webhook(job)
+        if transport == "dicom_pdf":
+            return self.send_dicom_encapsulated_pdf(job)
 
         raise RuntimeError(
             f"Conector '{transport}' não foi ativado. Mantenha DELIVERY_HUB_DRY_RUN=true "
             "até homologar o artefato e o protocolo do cliente."
         )
+
+    def download_pdf_artifact(self, job: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
+        response = self.session.get(
+            f"{API_BASE_URL}/api/report-delivery/jobs/{int(job['id'])}/artifact",
+            headers={"Accept": "application/pdf"},
+            timeout=max(30, int(job.get("timeout_seconds") or 30)),
+        )
+        response.raise_for_status()
+        content = response.content
+        if len(content) < 100 or not content.startswith(b"%PDF"):
+            raise RuntimeError("API não retornou um PDF clínico válido para o job DICOM.")
+
+        digest = hashlib.sha256(content).hexdigest()
+        expected = response.headers.get("X-Voxel-Artifact-SHA256", "").lower()
+        if expected and not secrets_compare(digest, expected):
+            raise RuntimeError("Hash do PDF recebido não confere com o informado pela API.")
+        return content, {
+            "pdf_sha256": digest,
+            "pdf_size_bytes": len(content),
+            "study_instance_uid": response.headers.get("X-Voxel-Study-Instance-UID", ""),
+        }
+
+    def send_dicom_encapsulated_pdf(self, job: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        if not DICOM_PDF_ENABLED:
+            raise RuntimeError("Conector DICOM PDF está desabilitado. Defina DELIVERY_HUB_DICOM_PDF_ENABLED=true após homologação.")
+
+        config = json.loads(job.get("configuration_json") or "{}")
+        host = str(config.get("host") or "").strip()
+        called_ae = str(config.get("called_ae") or "").strip()
+        calling_ae = str(config.get("calling_ae") or "VOXEL_PACS").strip()
+        port = int(config.get("port") or 0)
+        if not host or not called_ae or not calling_ae or not (1 <= port <= 65535):
+            raise RuntimeError("Destino DICOM exige host, porta, Called AE e Calling AE válidos.")
+        if config.get("use_tls"):
+            raise RuntimeError("DICOM TLS ainda não foi homologado para este destino; mantenha-o desabilitado.")
+        if not all(0 < len(value) <= 16 and all(char.isalnum() or char in "_ -" for char in value) for value in (called_ae, calling_ae)):
+            raise RuntimeError("AE Titles DICOM contêm caracteres inválidos.")
+
+        pdf, metadata = self.download_pdf_artifact(job)
+        dataset, sop_instance_uid = self.build_encapsulated_pdf_dataset(job, pdf)
+        timeout_seconds = max(5, min(120, int(job.get("timeout_seconds") or 30)))
+
+        with tempfile.TemporaryDirectory(prefix="voxel-dicom-pdf-") as temporary_directory:
+            dicom_path = Path(temporary_directory) / "report.pdf.dcm"
+            dataset.save_as(str(dicom_path), enforce_file_format=True)
+            result = subprocess.run(
+                ["storescu", "-aec", called_ae, "-aet", calling_ae, host, str(port), str(dicom_path)],
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                check=False,
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "erro sem detalhe").strip().replace("\n", " ")
+                raise RuntimeError(f"C-STORE recusado pelo PACS ({result.returncode}): {detail[:400]}")
+
+        metadata.update({
+            "mode": "dicom_pdf",
+            "sop_class_uid": str(EncapsulatedPDFStorage),
+            "sop_instance_uid": sop_instance_uid,
+            "called_ae": called_ae,
+            "calling_ae": calling_ae,
+            "remote_host": host,
+            "remote_port": port,
+        })
+        return f"dicom:{sop_instance_uid}", metadata
+
+    def build_encapsulated_pdf_dataset(self, job: dict[str, Any], pdf: bytes) -> tuple[FileDataset, str]:
+        payload = job.get("payload") or {}
+        if not isinstance(payload, dict):
+            raise RuntimeError("Payload clínico inválido para o artefato DICOM.")
+        study_uid = str(payload.get("study_instance_uid") or "").strip()
+        if not study_uid:
+            raise RuntimeError("StudyInstanceUID ausente no snapshot do job.")
+
+        now = datetime.now(timezone.utc)
+        sop_instance_uid = generate_uid()
+        file_meta = Dataset()
+        file_meta.MediaStorageSOPClassUID = EncapsulatedPDFStorage
+        file_meta.MediaStorageSOPInstanceUID = sop_instance_uid
+        file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
+        file_meta.ImplementationClassUID = PYDICOM_IMPLEMENTATION_UID
+
+        dataset = FileDataset(None, {}, file_meta=file_meta, preamble=b"\0" * 128)
+        dataset.SpecificCharacterSet = "ISO_IR 192"
+        dataset.SOPClassUID = EncapsulatedPDFStorage
+        dataset.SOPInstanceUID = sop_instance_uid
+        dataset.PatientName = str(payload.get("patient_name") or "")
+        dataset.PatientID = str(payload.get("patient_id") or "")
+        dataset.PatientBirthDate = normalize_dicom_date(str(payload.get("patient_birth_date") or ""))
+        dataset.PatientSex = str(payload.get("patient_sex") or "")[:1].upper()
+        dataset.StudyInstanceUID = study_uid
+        dataset.SeriesInstanceUID = generate_uid()
+        dataset.StudyDate = normalize_dicom_date(str(payload.get("study_date") or ""))
+        dataset.StudyTime = normalize_dicom_time(str(payload.get("study_time") or ""))
+        dataset.AccessionNumber = str(payload.get("accession_number") or "")
+        dataset.ReferringPhysicianName = ""
+        dataset.StudyID = ""
+        dataset.SeriesNumber = 999
+        dataset.InstanceNumber = 1
+        dataset.Modality = "DOC"
+        dataset.SeriesDescription = "Laudo Médico"
+        dataset.DocumentTitle = "Laudo Radiológico"
+        dataset.ContentDate = now.strftime("%Y%m%d")
+        dataset.ContentTime = now.strftime("%H%M%S")
+        dataset.BurnedInAnnotation = "NO"
+        dataset.MIMETypeOfEncapsulatedDocument = "application/pdf"
+        dataset.EncapsulatedDocument = pdf
+        return dataset, sop_instance_uid
 
     def send_https_webhook(self, job: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         config = json.loads(job.get("configuration_json") or "{}")
@@ -143,6 +263,18 @@ class DeliveryWorker:
             except Exception as exc:
                 LOGGER.exception("falha inesperada do worker: %s", exc)
                 time.sleep(max(POLL_SECONDS, 15))
+
+
+def normalize_dicom_date(value: str) -> str:
+    return "".join(char for char in value if char.isdigit())[:8]
+
+
+def normalize_dicom_time(value: str) -> str:
+    return "".join(char for char in value if char.isdigit())[:6]
+
+
+def secrets_compare(left: str, right: str) -> bool:
+    return hmac.compare_digest(left, right)
 
 
 if __name__ == "__main__":
