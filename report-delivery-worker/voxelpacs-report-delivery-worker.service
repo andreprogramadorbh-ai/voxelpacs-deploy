@@ -1,0 +1,20 @@
+[Unit]
+Description=VOXEL Report Delivery Hub Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/voxelpacs/report-delivery-worker
+EnvironmentFile=/opt/voxelpacs/report-delivery-worker/.env
+ExecStart=/opt/voxelpacs/report-delivery-worker/.venv/bin/python /opt/voxelpacs/report-delivery-worker/worker.py
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
