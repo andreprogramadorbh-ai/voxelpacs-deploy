@@ -23,7 +23,7 @@ LockPersonality=true
 RestrictSUIDSGID=true
 RestrictRealtime=true
 SystemCallArchitectures=native
-ReadWritePaths=/etc/voxelpacs-tenant-agent /var/lib/voxelpacs-tenant-agent /var/log/voxelpacs /etc/voxelpacs /etc/voxelpacs-backup /var/lib/orthanc /opt/voxelpacs /etc/systemd/system /etc/wireguard /etc/voxelpacs-gateway /run/lock
+ReadWritePaths=-/etc/voxelpacs-tenant-agent -/var/lib/voxelpacs-tenant-agent -/var/log/voxelpacs -/etc/voxelpacs -/etc/voxelpacs-backup -/var/lib/orthanc -/opt/voxelpacs -/etc/systemd/system -/etc/wireguard -/etc/voxelpacs-gateway -/run/lock
 
 [Install]
 WantedBy=multi-user.target
