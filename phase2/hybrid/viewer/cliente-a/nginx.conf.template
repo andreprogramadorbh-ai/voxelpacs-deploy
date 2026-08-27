@@ -61,6 +61,31 @@ server {
         proxy_set_header X-Forwarded-Proto https;
     }
 
+    # O app-config muda por tenant e não pode permanecer no cache do PWA.
+    location = /app-config.js {
+        auth_request /_voxel_viewer_auth;
+        error_page 401 = @viewer_unauthorized;
+        error_page 403 = @viewer_forbidden;
+        error_page 503 = @viewer_unavailable;
+        proxy_pass http://127.0.0.1:3001/app-config.js;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        add_header Cache-Control "no-store, max-age=0" always;
+    }
+
+    # Caminhos históricos são normalizados sem dispensar a autenticação no
+    # destino. A rota DICOMweb explícita evita datasource nulo no OHIF v3.12.
+    location = /viewer {
+        auth_request /_voxel_viewer_auth;
+        error_page 401 = @viewer_unauthorized;
+        error_page 403 = @viewer_forbidden;
+        error_page 503 = @viewer_unavailable;
+        return 302 /viewer/dicomweb$is_args$args;
+    }
+
     location /dicom-web/ {
         auth_request /_voxel_viewer_auth;
         error_page 401 = @viewer_unauthorized;

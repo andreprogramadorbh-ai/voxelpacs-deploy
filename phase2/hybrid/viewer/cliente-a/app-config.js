@@ -20,4 +20,5 @@ window.config = {
       },
     },
   ],
+  defaultDataSourceName: 'dicomweb',
 };
