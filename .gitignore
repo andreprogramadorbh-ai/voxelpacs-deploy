@@ -21,6 +21,8 @@ orthanc/credentials.json
 ssl/
 
 # Temporários
+__pycache__/
+*.py[cod]
 *.tmp
 *.bak
 *.swp

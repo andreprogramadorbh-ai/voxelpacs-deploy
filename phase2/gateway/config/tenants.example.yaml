@@ -1,0 +1,38 @@
+# Arquivo operacional root-only: não versionar IPs reais, chaves WireGuard ou certificados.
+# Esta versão é um modelo de homologação. O gateway inicia sem rota produtiva
+# enquanto source_cidrs e source_calling_aets não forem confirmados para o Cliente A.
+server:
+  bind_address: "0.0.0.0"
+  port: 4242
+  ae_title: "VOXEL_GW_A"
+  maximum_associations: 16
+  acse_timeout_seconds: 15
+  dimse_timeout_seconds: 60
+  network_timeout_seconds: 30
+  tls:
+    enabled: false
+    # Habilitar somente após homologação de DICOM TLS com certificados emitidos por CA confiável.
+    certificate_file: "/etc/voxelpacs-gateway/tls/server.crt"
+    private_key_file: "/etc/voxelpacs-gateway/tls/server.key"
+    trusted_ca_file: "/etc/voxelpacs-gateway/tls/client-ca.crt"
+
+audit:
+  log_file: "/var/log/voxelpacs-gateway/association-audit.jsonl"
+  # Nunca incluir PatientName, PatientID ou UIDs de estudo/série/instância.
+
+tenants:
+  - key: "cliente-a"
+    enabled: false
+    called_ae: "VOXEL_GW_A"
+    source_calling_aets:
+      - "CLIENTE_A_MOD"
+    source_cidrs:
+      - "10.200.10.2/32"  # IP WireGuard reservado para o emissor do Cliente A
+    allowed_services:
+      - "C_ECHO"
+      - "C_STORE"
+    backend:
+      host: "10.0.0.3"
+      port: 4244
+      called_ae: "VOXEL_A_PACS"
+      calling_ae: "VOXEL_GW_A"

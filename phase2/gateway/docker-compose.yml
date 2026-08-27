@@ -1,0 +1,36 @@
+services:
+  dicom-gateway:
+    build:
+      context: .
+    image: voxelpacs/dicom-gateway:0.2.0
+    container_name: voxelpacs-dicom-gateway
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ports:
+      # Diagnóstico e encaminhamento somente pela rede privada Hetzner.
+      - "${GATEWAY_PRIVATE_IP:?Defina o IP privado}:4242:4242/tcp"
+      # Clientes nunca usam o IP público: alcançam estes listeners exclusivamente pela WireGuard.
+      - "${GATEWAY_VPN_IP:?Defina o IP da WireGuard}:4242:4242/tcp"
+      - "${GATEWAY_VPN_IP}:2762:2762/tcp"
+    volumes:
+      - /etc/voxelpacs-gateway/tenants.yaml:/etc/voxelpacs-gateway/tenants.yaml:ro
+      # Diretório root-owned: certificados públicos 0644; chave do servidor 0640 root:10001.
+      - ${GATEWAY_TLS_DIR:?Defina o diretório TLS}:/etc/voxelpacs-gateway/tls:ro
+      - /var/log/voxelpacs-gateway:/var/log/voxelpacs-gateway
+      - /tmp:/tmp
+    tmpfs:
+      - /run:rw,noexec,nosuid,size=16m
+    deploy:
+      resources:
+        limits:
+          cpus: "1.50"
+          memory: 1536M
+    logging:
+      driver: local
+      options:
+        max-size: 20m
+        max-file: "7"

@@ -1,0 +1,23 @@
+{
+  "Name": "VOXEL_CLIENTE_A",
+  "StorageDirectory": "/var/lib/orthanc/db",
+  "RemoteAccessAllowed": true,
+  "AuthenticationEnabled": true,
+  "OrthancExplorerEnabled": false,
+  "DicomAet": "VOXEL_A_PACS",
+  "DicomPort": 4242,
+  "DicomCheckCalledAet": true,
+  "DicomCheckCallingAet": true,
+  "DicomCheckModalityHost": true,
+  "DicomAlwaysAllowEcho": false,
+  "DicomAlwaysAllowStore": false,
+  "DicomAllowFind": false,
+  "DicomAllowGet": false,
+  "DicomAllowMove": false,
+  "DicomModalities": {
+    "VOXEL_GW_A": ["VOXEL_GW_A", "10.0.0.4", 4242]
+  },
+  "HttpDescribeErrors": false,
+  "HttpVerbose": false,
+  "DicomVerbose": false
+}

@@ -1,0 +1,77 @@
+# Referência operacional. Copie para um arquivo root-only no gateway.
+# Não versione IPs públicos, chaves WireGuard, certificados privados ou credenciais.
+# Rota habilitada somente após validação sintética, backup e aceite do tenant.
+listeners:
+  - key: vpn-plain
+    bind_address: "0.0.0.0"
+    port: 4242
+    ae_title: "VOXEL_GATEWAY"
+    maximum_associations: 12
+    acse_timeout_seconds: 15
+    dimse_timeout_seconds: 60
+    network_timeout_seconds: 30
+    allowed_profiles: ["vpn_only", "site_router"]
+    tls:
+      enabled: false
+
+  - key: vpn-mtls
+    bind_address: "0.0.0.0"
+    port: 2762
+    ae_title: "VOXEL_GW_TLS"
+    maximum_associations: 8
+    acse_timeout_seconds: 15
+    dimse_timeout_seconds: 60
+    network_timeout_seconds: 30
+    allowed_profiles: ["vpn_mtls"]
+    tls:
+      enabled: true
+      certificate_file: "/etc/voxelpacs-gateway/tls/server.crt"
+      private_key_file: "/etc/voxelpacs-gateway/tls/server.key"
+      trusted_ca_file: "/etc/voxelpacs-gateway/tls/client-ca.crt"
+
+audit:
+  log_file: "/var/log/voxelpacs-gateway/association-audit.jsonl"
+  # Não registrar PatientName, PatientID, Study/Series/SOP Instance UID nem dataset.
+
+tenants:
+  - key: "cliente-a"
+    enabled: false
+    profile: "vpn_mtls"
+    listener: "vpn-mtls"
+    called_ae: "VOXEL_GW_A"
+    source_calling_aets: ["PACSFIR"]
+    source_cidrs: ["10.200.10.2/32"]
+    allowed_services: ["C_ECHO", "C_STORE"]
+    backend:
+      host: "10.0.0.3"
+      port: 4244
+      called_ae: "VOXEL_A_PACS"
+      calling_ae: "VOXEL_GW_A"
+
+  - key: "cliente-b"
+    enabled: false
+    profile: "vpn_only"
+    listener: "vpn-plain"
+    called_ae: "VOXEL_GW_B"
+    source_calling_aets: ["CLIENTE_B_ROUTER"]
+    source_cidrs: ["10.200.20.2/32"]
+    allowed_services: ["C_ECHO", "C_STORE"]
+    backend:
+      host: "10.0.0.3"
+      port: 4245
+      called_ae: "VOXEL_B_PACS"
+      calling_ae: "VOXEL_GW_B"
+
+  - key: "cliente-c"
+    enabled: false
+    profile: "site_router"
+    listener: "vpn-plain"
+    called_ae: "VOXEL_GW_C"
+    source_calling_aets: ["CLIENTE_C_ROUTER"]
+    source_cidrs: ["10.200.30.2/32"]
+    allowed_services: ["C_ECHO", "C_STORE"]
+    backend:
+      host: "10.0.0.3"
+      port: 4246
+      called_ae: "VOXEL_C_PACS"
+      calling_ae: "VOXEL_GW_C"

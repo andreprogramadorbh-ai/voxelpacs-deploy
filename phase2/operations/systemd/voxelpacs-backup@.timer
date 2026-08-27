@@ -1,0 +1,11 @@
+[Unit]
+Description=Agendamento diário do backup VOXEL PACS para o tenant %i
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=30m
+Persistent=true
+Unit=voxelpacs-backup@%i.service
+
+[Install]
+WantedBy=timers.target

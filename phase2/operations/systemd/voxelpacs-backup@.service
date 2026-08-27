@@ -1,0 +1,19 @@
+[Unit]
+Description=VOXEL PACS backup cifrado do tenant %i
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+ExecStart=/usr/local/sbin/voxelpacs-backup-tenant --tenant %i
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/backups/voxelpacs /var/lib/orthanc/tenants /var/cache/voxelpacs/restic /run/lock

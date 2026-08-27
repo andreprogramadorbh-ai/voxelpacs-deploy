@@ -1,0 +1,23 @@
+{
+  "Name": "__ORTHANC_NAME__",
+  "StorageDirectory": "/var/lib/orthanc/db",
+  "RemoteAccessAllowed": true,
+  "AuthenticationEnabled": true,
+  "OrthancExplorerEnabled": false,
+  "DicomAet": "__BACKEND_AE__",
+  "DicomPort": 4242,
+  "DicomCheckCalledAet": true,
+  "DicomCheckCallingAet": true,
+  "DicomCheckModalityHost": true,
+  "DicomAlwaysAllowEcho": false,
+  "DicomAlwaysAllowStore": false,
+  "DicomAllowFind": false,
+  "DicomAllowGet": false,
+  "DicomAllowMove": false,
+  "DicomModalities": {
+    "__GATEWAY_CALLING_AE__": ["__GATEWAY_CALLING_AE__", "__GATEWAY_PRIVATE_IP__", 4242]
+  },
+  "HttpDescribeErrors": false,
+  "HttpVerbose": false,
+  "DicomVerbose": false
+}

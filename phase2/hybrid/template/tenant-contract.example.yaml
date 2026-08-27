@@ -1,0 +1,55 @@
+# Modelo declarativo; use uma cópia root-only no host e nunca versione valores reais de credenciais ou chaves.
+# A criação mantém enabled: false até a homologação sintética documentada.
+version: 1
+tenant:
+  key: cliente-b
+  display_name: Cliente B
+  status: provisioned
+  enabled: false
+  profile: vpn_only # vpn_mtls | vpn_only | site_router
+
+network:
+  gateway_private_ip: 10.0.0.4
+  api_private_ip: 10.0.0.2
+  host_private_ip: 10.0.0.3
+  dicom_port: 4245
+  dicomweb_port: 8045
+  vpn_source_cidrs:
+    - 10.200.20.2/32
+
+identity:
+  gateway_called_ae: VOXEL_GW_B
+  backend_ae: VOXEL_B_PACS
+  gateway_calling_ae: VOXEL_GW_B
+  source_calling_aets:
+    - CLIENTE_B_ROUTER
+
+security:
+  # Para `vpn_mtls`, exigido: certificado cliente emitido por CA da Voxel.
+  # Para `vpn_only` e `site_router`, o tunel WireGuard é obrigatório; jamais publicar DICOM na Internet.
+  require_dicom_tls: false
+  allow_plaintext_inside_vpn: true
+  allow_services:
+    - C_ECHO
+    - C_STORE
+
+capacity:
+  orthanc_cpu_limit: "1.00"
+  orthanc_memory_limit: 1024M
+  postgres_cpu_limit: "0.50"
+  postgres_memory_limit: 512M
+  postgres_max_connections: 30
+  orthanc_index_connections: 8
+
+backup:
+  enabled: false
+  repository_namespace: cliente-b
+  rpo_hours: 24
+  retention_days: 30
+  restore_test_interval_days: 90
+
+observability:
+  enabled: false
+  alert_disk_percent: 70
+  alert_memory_percent: 80
+  alert_cstore_failure_count: 5
