@@ -48,7 +48,8 @@ server {
         proxy_ssl_server_name on;
         proxy_ssl_name server.voxelpacs.com.br;
         proxy_ssl_verify on;
-        proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+        # Cadeia pública específica da API privada, instalada pelo provisionador.
+        proxy_ssl_trusted_certificate /etc/ssl/certs/voxelpacs-api-chain.pem;
         proxy_pass_request_body off;
         proxy_set_header Content-Length "";
         proxy_set_header Cookie $http_cookie;
