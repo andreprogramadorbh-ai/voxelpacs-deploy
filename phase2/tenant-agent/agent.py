@@ -30,7 +30,7 @@ import yaml
 AE_RE = re.compile(r"^[A-Z0-9_-]{1,16}$")
 SLUG_RE = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f-]{27,36}$")
-ALLOWED_ACTIONS = frozenset({"provision_cell", "configure_wireguard_echo", "register_control_plane", "enable_cstore", "suspend_route", "check_echo"})
+ALLOWED_ACTIONS = frozenset({"provision_cell", "configure_wireguard_echo", "register_control_plane", "activate_control_plane", "enable_cstore", "suspend_route", "check_echo"})
 
 
 def require_role(expected: str) -> None:
@@ -387,6 +387,33 @@ COMMIT;
     return {"status": "echo_ready", "server_id": int(server_id), "cell_id": int(cell_id), "tenant": tenant}
 
 
+def api_db_activate(payload: dict[str, Any]) -> dict[str, Any]:
+    """Marca ativa somente a célula previamente validada por C-ECHO."""
+    require_role("api")
+    operation_id = safe_uuid(payload.get("operation_id"))
+    schema = api_db_schema()
+    sql = f"""
+BEGIN;
+SET LOCAL search_path TO {schema}, public;
+WITH operation AS (
+  SELECT id, cell_id FROM bi_pacs_tenant_provisioning
+  WHERE operation_id={sql_literal(operation_id)} AND status='echo_validated' FOR UPDATE
+), changed AS (
+  UPDATE bi_pacs_tenant_provisioning p SET status='active', current_step='active', activated_at=NOW(), updated_at=NOW()
+  FROM operation WHERE p.id=operation.id RETURNING operation.cell_id
+)
+UPDATE bi_tenant_orthanc_cells c SET status='active', updated_at=NOW()
+FROM changed WHERE c.id=changed.cell_id
+RETURNING c.id;
+COMMIT;
+"""
+    database = env("API_DB_NAME", "voxelpacs_homolog")
+    result = run(["/usr/bin/sudo", "-u", "postgres", "/usr/bin/psql", "-X", "-v", "ON_ERROR_STOP=1", "-tA", "-d", database, "-c", sql], timeout=30)
+    if not any(line.strip().isdigit() for line in result.stdout.splitlines()):
+        raise AgentError("A célula não está disponível para ativação por C-STORE.")
+    return {"status": "active"}
+
+
 def configure_wireguard_echo(payload: dict[str, Any]) -> dict[str, Any]:
     require_role("gateway")
     peer_key = require_public_key(payload.get("wireguard_public_key"))
@@ -452,6 +479,8 @@ def perform(action: str, payload: dict[str, Any]) -> dict[str, Any]:
         return configure_wireguard_echo(payload)
     if action == "register_control_plane":
         return api_db_register(payload)
+    if action == "activate_control_plane":
+        return api_db_activate(payload)
     if action == "enable_cstore":
         return enable_cstore(payload)
     if action == "suspend_route":
