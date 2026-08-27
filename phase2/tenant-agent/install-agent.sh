@@ -40,9 +40,14 @@ INSTALL_DIR=/usr/local/lib/voxelpacs/tenant-agent
 ETC_DIR=/etc/voxelpacs-tenant-agent
 STATE_DIR=/var/lib/voxelpacs-tenant-agent/nonces
 LOG_DIR=/var/log/voxelpacs
+TLS_DIR=/etc/voxelpacs-tenant-agent/tls
 UNIT=/etc/systemd/system/voxelpacs-tenant-agent.service
 
-install -d -m 0700 -o root -g root "$INSTALL_DIR" "$ETC_DIR" "$STATE_DIR" "$LOG_DIR"
+for required in "$TLS_DIR/server.crt" "$TLS_DIR/server.key" "$TLS_DIR/ca.crt"; do
+  [[ -f "$required" ]] || { echo "Material mTLS interno ausente: $required" >&2; exit 1; }
+done
+
+install -d -m 0700 -o root -g root "$INSTALL_DIR" "$ETC_DIR" "$STATE_DIR" "$LOG_DIR" "$TLS_DIR"
 install -m 0700 -o root -g root "$SOURCE_DIR/agent.py" "$INSTALL_DIR/agent.py"
 install -m 0644 -o root -g root "$SOURCE_DIR/voxelpacs-tenant-agent.service" "$UNIT"
 install -m 0600 -o root -g root "$HMAC_KEY_FILE" "$ETC_DIR/hmac.key"
@@ -55,6 +60,9 @@ API_SOURCE_IP=${API_SOURCE_IP}
 AUTH_SECRET_FILE=${ETC_DIR}/hmac.key
 NONCE_DIR=${STATE_DIR}
 AUDIT_LOG=${LOG_DIR}/tenant-agent.jsonl
+TLS_CERT_FILE=${TLS_DIR}/server.crt
+TLS_KEY_FILE=${TLS_DIR}/server.key
+TLS_CLIENT_CA_FILE=${TLS_DIR}/ca.crt
 WG_CLIENT_NETWORK=10.200.10.0/24
 API_PRIVATE_IP=10.0.0.2
 GATEWAY_PRIVATE_IP=10.0.0.4

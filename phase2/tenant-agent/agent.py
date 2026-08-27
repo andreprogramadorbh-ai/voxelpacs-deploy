@@ -14,6 +14,7 @@ import ipaddress
 import json
 import os
 import re
+import ssl
 import subprocess
 import tempfile
 import time
@@ -424,7 +425,19 @@ def main() -> None:
     port = int(env("BIND_PORT", "8813"))
     if not host or not 1 <= port <= 65535:
         raise RuntimeError("Endereço de bind inválido.")
-    ThreadingHTTPServer((host, port), Handler).serve_forever()
+    certificate = Path(env("TLS_CERT_FILE"))
+    private_key = Path(env("TLS_KEY_FILE"))
+    client_ca = Path(env("TLS_CLIENT_CA_FILE"))
+    if not certificate.is_file() or not private_key.is_file() or not client_ca.is_file():
+        raise RuntimeError("Material mTLS interno ausente.")
+    context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.verify_mode = ssl.CERT_REQUIRED
+    context.load_cert_chain(str(certificate), str(private_key))
+    context.load_verify_locations(cafile=str(client_ca))
+    server = ThreadingHTTPServer((host, port), Handler)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    server.serve_forever()
 
 
 if __name__ == "__main__":
