@@ -74,6 +74,13 @@ if [[ "$ROLE" == api ]]; then
 API_DB_NAME=voxelpacs_homolog
 API_DB_SCHEMA=voxelpacs_mysql_source
 EOF
+  # A API precisa assinar ordens para os agentes remotos, mas a chave nunca é
+  # exposta por HTTP. Concede leitura apenas ao grupo do PHP-FPM local.
+  getent group voxel >/dev/null || { echo 'Grupo do PHP-FPM voxel ausente.' >&2; exit 1; }
+  chown root:voxel "$ETC_DIR"
+  chmod 0710 "$ETC_DIR"
+  chown root:voxel "$ETC_DIR/hmac.key"
+  chmod 0640 "$ETC_DIR/hmac.key"
   install -d -m 0755 /etc/systemd/system/voxelpacs-tenant-agent.service.d
   cat > /etc/systemd/system/voxelpacs-tenant-agent.service.d/role-api.conf <<'EOF'
 [Service]
