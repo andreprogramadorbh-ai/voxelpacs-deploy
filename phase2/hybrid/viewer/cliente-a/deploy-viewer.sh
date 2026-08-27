@@ -48,6 +48,20 @@ if ! docker inspect -f '{{.State.Status}}' voxelpacs-cliente-a-ohif | grep -qx r
     exit 1
 fi
 
+# A CA intermediária atual da API ainda não existe no bundle desta imagem Ubuntu.
+# Concatena a cadeia transmitida pela API ao bundle local e valida antes de trocar o trust file.
+CHAIN_WORK=$(mktemp -d)
+trap 'rm -rf "$CHAIN_WORK"' RETURN
+openssl s_client -connect 10.0.0.2:443 -servername server.voxelpacs.com.br -showcerts </dev/null > "$CHAIN_WORK/raw" 2>/dev/null
+awk "BEGIN { n = 0 } /BEGIN CERTIFICATE/ { n++; out = \"$CHAIN_WORK/cert-\" n \".pem\" } { if (out != \"\") print > out } /END CERTIFICATE/ { close(out); out = \"\" }" "$CHAIN_WORK/raw"
+[ -s "$CHAIN_WORK/cert-1.pem" ] && [ -s "$CHAIN_WORK/cert-2.pem" ] || { echo "cadeia TLS da API incompleta" >&2; exit 1; }
+cat "$CHAIN_WORK"/cert-[2-9].pem /etc/ssl/certs/ca-certificates.crt > /etc/ssl/certs/voxelpacs-api-chain.pem.tmp
+openssl verify -CAfile /etc/ssl/certs/voxelpacs-api-chain.pem.tmp "$CHAIN_WORK/cert-1.pem" >/dev/null
+chmod 0644 /etc/ssl/certs/voxelpacs-api-chain.pem.tmp
+mv /etc/ssl/certs/voxelpacs-api-chain.pem.tmp /etc/ssl/certs/voxelpacs-api-chain.pem
+rm -rf "$CHAIN_WORK"
+trap - RETURN
+
 basic=$(cat "$BASIC_FILE")
 sed "s|__ORTHANC_CLIENT_A_API_BASIC__|$basic|g" "$NGINX_TEMPLATE" > "$NGINX_DEST.tmp"
 chmod 0644 "$NGINX_DEST.tmp"
