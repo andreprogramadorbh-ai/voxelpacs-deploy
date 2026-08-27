@@ -208,7 +208,8 @@ def validate_policy(temp_path: Path) -> None:
     # O container monta /tmp e contém dependências Python do gateway. A validação
     # não publica portas porque `docker compose run` não as expõe por padrão.
     run([
-        "/usr/bin/docker", "compose", "-p", env("GATEWAY_COMPOSE_PROJECT", "voxelpacs-gateway"),
+        "/usr/bin/docker", "compose", "--env-file", env("GATEWAY_ENV_FILE", "/etc/voxelpacs-gateway/gateway.env"),
+        "-p", env("GATEWAY_COMPOSE_PROJECT", "voxelpacs-gateway"),
         "-f", compose, "run", "--rm", "--no-deps", "--entrypoint", "python",
         "dicom-gateway", "/app/gateway.py", f"/tmp/{temp_path.name}", "--validate",
     ], timeout=60)
@@ -281,7 +282,8 @@ def write_route(payload: dict[str, Any], allow_store: bool = False, enabled: boo
         validate_policy(temp_path)
         os.replace(temp_path, path)
         run([
-            "/usr/bin/docker", "compose", "-p", env("GATEWAY_COMPOSE_PROJECT", "voxelpacs-gateway"),
+            "/usr/bin/docker", "compose", "--env-file", env("GATEWAY_ENV_FILE", "/etc/voxelpacs-gateway/gateway.env"),
+            "-p", env("GATEWAY_COMPOSE_PROJECT", "voxelpacs-gateway"),
             "-f", env("GATEWAY_COMPOSE", "/opt/voxelpacs/gateway/docker-compose.yml"),
             "up", "-d", "--no-deps", "dicom-gateway",
         ], timeout=100)

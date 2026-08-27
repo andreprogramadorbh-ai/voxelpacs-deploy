@@ -73,6 +73,7 @@ WG_CONFIG=/etc/wireguard/wg0.conf
 GATEWAY_POLICY=/etc/voxelpacs-gateway/tenants.yaml
 GATEWAY_APP=/opt/voxelpacs/gateway/app/gateway.py
 GATEWAY_COMPOSE=/opt/voxelpacs/gateway/docker-compose.yml
+GATEWAY_ENV_FILE=/etc/voxelpacs-gateway/gateway.env
 GATEWAY_COMPOSE_PROJECT=voxelpacs-gateway
 GATEWAY_AUDIT_LOG=/var/log/voxelpacs-gateway/audit.jsonl
 EOF
