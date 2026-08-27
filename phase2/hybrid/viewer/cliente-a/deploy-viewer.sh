@@ -43,7 +43,7 @@ fi
 
 # O container OHIF não contém dados clínicos; ele só aponta ao proxy autenticado.
 (cd "$ROOT" && docker compose up -d --pull always)
-if ! docker inspect -f '{{.State.Status}}' voxelpacs-cliente-a-viewer | grep -qx running; then
+if ! docker inspect -f '{{.State.Status}}' voxelpacs-cliente-a-ohif | grep -qx running; then
     echo "viewer Cliente A não iniciou" >&2
     exit 1
 fi
