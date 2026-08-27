@@ -50,9 +50,11 @@ set +a
 export RESTIC_REPOSITORY="${RESTIC_REPOSITORY_BASE%/}/${BACKUP_NAMESPACE}"
 export RESTIC_CACHE_DIR="${RESTIC_CACHE_DIR:-/var/cache/voxelpacs/restic}"
 install -d -m 0700 "$RESTIC_CACHE_DIR"
+# Manter compatibilidade com o endpoint S3 do Object Storage Hetzner.
+restic_s3() { restic -o s3.bucket-lookup=path "$@"; }
 
 # Confirma que o snapshot pertence ao tenant. Não permite recuperação cruzada.
-restic snapshots "$SNAPSHOT" --json | grep -Fq "\"tenant:${TENANT}\"" || {
+restic_s3 snapshots "$SNAPSHOT" --json | grep -Fq "\"tenant:${TENANT}\"" || {
   echo "Recusado: snapshot não pertence ao tenant solicitado" >&2
   exit 1
 }
@@ -60,7 +62,7 @@ restic snapshots "$SNAPSHOT" --json | grep -Fq "\"tenant:${TENANT}\"" || {
 umask 077
 mkdir -p "$TARGET"
 trap 'rm -rf "$TARGET"' ERR
-restic restore "$SNAPSHOT" --target "$TARGET"
+restic_s3 restore "$SNAPSHOT" --target "$TARGET"
 
 INDEX_COUNT=$(find "$TARGET" -name orthanc-index.dump -type f | wc -l)
 DICOM_ROOT_COUNT=$(find "$TARGET" -type d -path '*/dicom' | wc -l)

@@ -64,10 +64,13 @@ set +a
 export RESTIC_REPOSITORY="${RESTIC_REPOSITORY_BASE%/}/${BACKUP_NAMESPACE}"
 export RESTIC_CACHE_DIR="${RESTIC_CACHE_DIR:-/var/cache/voxelpacs/restic}"
 install -d -m 0700 "$RESTIC_CACHE_DIR"
+# Hetzner Object Storage é S3-compatível. Forçar path-style elimina a ambiguidade
+# de descoberta de bucket e mantém a chamada compatível com o endpoint hel1.
+restic_s3() { restic -o s3.bucket-lookup=path "$@"; }
 [[ -n "${COMPOSE_PROJECT:-}" && -n "${POSTGRES_DB:-}" && -n "${POSTGRES_USER:-}" ]] || { echo "Ambiente da célula incompleto" >&2; exit 1; }
 
 if [[ "$VALIDATE_ONLY" == true ]]; then
-  restic snapshots --tag "tenant:${TENANT}" --quiet >/dev/null
+  restic_s3 snapshots --tag "tenant:${TENANT}" --quiet >/dev/null
   echo "BACKUP_TENANT_VALIDATION_OK tenant=${TENANT}"
   exit 0
 fi
@@ -93,15 +96,15 @@ docker compose --env-file "$TENANT_APP_ENV" -p "$COMPOSE_PROJECT" -f "$TENANT_CO
   > "$WORKDIR/orthanc-index.dump"
 chmod 0600 "$WORKDIR/orthanc-index.dump"
 
-restic backup --quiet --tag "tenant:${TENANT}" --tag "component:index" "$WORKDIR/orthanc-index.dump"
-restic backup --quiet --tag "tenant:${TENANT}" --tag "component:objects" "$TENANT_DATA/dicom"
-restic backup --quiet --tag "tenant:${TENANT}" --tag "component:config" "$CONFIG_ROOT"
+restic_s3 backup --quiet --tag "tenant:${TENANT}" --tag "component:index" "$WORKDIR/orthanc-index.dump"
+restic_s3 backup --quiet --tag "tenant:${TENANT}" --tag "component:objects" "$TENANT_DATA/dicom"
+restic_s3 backup --quiet --tag "tenant:${TENANT}" --tag "component:config" "$CONFIG_ROOT"
 
 # Política por tenant: esquecer snapshots vencidos exige aprovação de retenção; execute
 # somente quando RETENTION_PRUNE_APPROVED=true no contrato root-only.
 if [[ "${RETENTION_PRUNE_APPROVED:-false}" == "true" ]]; then
-  restic forget --quiet --tag "tenant:${TENANT}" --keep-within "${RETENTION_DAYS:-30}d" --prune
+  restic_s3 forget --quiet --tag "tenant:${TENANT}" --keep-within "${RETENTION_DAYS:-30}d" --prune
 fi
 
-SNAPSHOT_ID=$(restic snapshots --tag "tenant:${TENANT}" --latest 1 --json | sed -n 's/.*"short_id":"\([a-f0-9]*\)".*/\1/p' | head -1)
+SNAPSHOT_ID=$(restic_s3 snapshots --tag "tenant:${TENANT}" --latest 1 --json | sed -n 's/.*"short_id":"\([a-f0-9]*\)".*/\1/p' | head -1)
 printf 'backup_completed tenant=%s snapshot=%s timestamp=%s\n' "$TENANT" "${SNAPSHOT_ID:-unknown}" "$(date --iso-8601=seconds)"
