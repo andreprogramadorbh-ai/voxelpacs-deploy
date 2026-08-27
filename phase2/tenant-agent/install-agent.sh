@@ -75,7 +75,9 @@ BOOTSTRAP_SCRIPT=/opt/voxelpacs/phase2/hybrid/bootstrap-tenant.sh
 BACKUP_SCRIPT=/opt/voxelpacs/phase2/operations/backup/backup-tenant.sh
 EOF
 else
-  cat >> "$ETC_DIR/agent.env" <<'EOF'
+  GATEWAY_AUDIT_LOG=$(awk -F: '/^[[:space:]]*log_file:/{gsub(/[[:space:]"'"'"'"'"'"']/, "", $2); print $2; exit}' /etc/voxelpacs-gateway/tenants.yaml)
+  [[ "$GATEWAY_AUDIT_LOG" =~ ^/var/log/voxelpacs-gateway/ ]] || { echo 'Caminho de auditoria do gateway inválido.' >&2; exit 1; }
+  cat >> "$ETC_DIR/agent.env" <<EOF
 WG_INTERFACE=wg0
 WG_CONFIG=/etc/wireguard/wg0.conf
 GATEWAY_POLICY=/etc/voxelpacs-gateway/tenants.yaml
@@ -83,7 +85,7 @@ GATEWAY_APP=/opt/voxelpacs/gateway/app/gateway.py
 GATEWAY_COMPOSE=/opt/voxelpacs/gateway/docker-compose.yml
 GATEWAY_ENV_FILE=/etc/voxelpacs-gateway/gateway.env
 GATEWAY_COMPOSE_PROJECT=voxelpacs-gateway
-GATEWAY_AUDIT_LOG=/var/log/voxelpacs-gateway/audit.jsonl
+GATEWAY_AUDIT_LOG=${GATEWAY_AUDIT_LOG}
 EOF
 fi
 chmod 0600 "$ETC_DIR/agent.env"
