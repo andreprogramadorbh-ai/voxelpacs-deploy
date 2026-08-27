@@ -3,7 +3,8 @@ services:
     image: ohif/app:v3.12.5
     container_name: voxelpacs-cliente-a-ohif
     restart: unless-stopped
-    read_only: true
+    # A imagem oficial ajusta o app-config e o default.conf durante o entrypoint.
+    # O filesystem permanece efêmero no overlay do container; nenhum volume host é gravável.
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
       - /var/cache/nginx:rw,noexec,nosuid,size=32m
@@ -12,6 +13,8 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    cap_add:
+      - NET_BIND_SERVICE
     ports:
       - "127.0.0.1:3001:80"
     volumes:
