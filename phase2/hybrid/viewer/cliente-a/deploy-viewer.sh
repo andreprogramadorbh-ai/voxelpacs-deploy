@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT=/opt/voxelpacs/phase2/hybrid/viewer/cliente-a
 ORTHANC_DIR=/opt/voxelpacs/phase2/hybrid/compose/cliente-a
 ORTHANC_JSON=/etc/voxelpacs/tenants/cliente-a/orthanc.json
+CREDENTIALS_JSON=/etc/voxelpacs/tenants/cliente-a/credentials.json
 BASIC_FILE=/etc/voxelpacs/tenants/cliente-a/viewer-proxy.basic
 PASSWORD_FILE=/tmp/cliente-a-api-service.password
 CONFIGURATOR="$ROOT/configure-proxy-credential.py"
@@ -12,7 +13,7 @@ NGINX_DEST=/etc/nginx/sites-available/cliente-a-view.conf
 NGINX_LINK=/etc/nginx/sites-enabled/cliente-a-view.conf
 ACME_TEMP=/etc/nginx/conf.d/cliente-a-viewer-acme.conf
 
-for file in "$ORTHANC_JSON" "$PASSWORD_FILE" "$CONFIGURATOR" "$NGINX_TEMPLATE" "$ROOT/docker-compose.yml" "$ROOT/app-config.js"; do
+for file in "$ORTHANC_JSON" "$CREDENTIALS_JSON" "$PASSWORD_FILE" "$CONFIGURATOR" "$NGINX_TEMPLATE" "$ROOT/docker-compose.yml" "$ROOT/app-config.js"; do
     [ -f "$file" ] || { echo "arquivo obrigatório ausente: $file" >&2; exit 2; }
 done
 
@@ -20,18 +21,21 @@ STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 ROLLBACK=/root/voxelpacs-runtime-backups/cliente-a-viewer-$STAMP
 install -d -m 0700 "$ROLLBACK"
 cp -a "$ORTHANC_JSON" "$ROLLBACK/orthanc.json"
+cp -a "$CREDENTIALS_JSON" "$ROLLBACK/credentials.json"
 [ -f "$NGINX_DEST" ] && cp -a "$NGINX_DEST" "$ROLLBACK/cliente-a-view.conf" || true
 [ -f "$ACME_TEMP" ] && cp -a "$ACME_TEMP" "$ROLLBACK/cliente-a-viewer-acme.conf" || true
 
 python3 -m json.tool "$ORTHANC_JSON" >/dev/null
-python3 "$CONFIGURATOR" "$ORTHANC_JSON" "$BASIC_FILE" "$PASSWORD_FILE"
-# O configurador preserva UID, GID e modo do arquivo Orthanc existente.
+python3 -m json.tool "$CREDENTIALS_JSON" >/dev/null
+python3 "$CONFIGURATOR" "$CREDENTIALS_JSON" "$BASIC_FILE" "$PASSWORD_FILE"
+# O configurador preserva UID, GID e modo do arquivo de credenciais existente.
 # O proprietário numérico atual corresponde ao usuário orthanc dentro do container.
 chmod 0600 "$BASIC_FILE"
 chown root:root "$BASIC_FILE"
 
 if ! (cd "$ORTHANC_DIR" && docker compose restart orthanc && docker inspect -f '{{.State.Health.Status}}' voxelpacs-cliente-a-orthanc | grep -qx healthy); then
     cp -a "$ROLLBACK/orthanc.json" "$ORTHANC_JSON"
+    cp -a "$ROLLBACK/credentials.json" "$CREDENTIALS_JSON"
     (cd "$ORTHANC_DIR" && docker compose restart orthanc) || true
     echo "reinício Orthanc A falhou; configuração restaurada" >&2
     exit 1
