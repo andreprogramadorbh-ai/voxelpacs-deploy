@@ -85,7 +85,14 @@ if ss -ltnH | awk '{print $4}' | grep -Eq "(^|:)(\[?${HOST_PRIVATE_IP}\]?|0\.0\.
 fi
 
 umask 077
-install -d -m 0750 -o root -g root "$BASE" "$CONFIG" "$DATA/dicom" "$DATA/postgres"
+install -d -m 0750 -o root -g root "$BASE" "$CONFIG" "$DATA/dicom"
+# A imagem Orthanc executa como UID/GID 999; o diretório de objetos é isolado
+# por tenant e deve ser gravável somente por esse usuário não privilegiado.
+chown 999:999 "$DATA/dicom"
+chmod 0750 "$DATA/dicom"
+# A imagem oficial PostgreSQL inicializa como root e ajusta este diretório no
+# primeiro start. Mantê-lo root-only evita ampliar acesso ao índice do tenant.
+install -d -m 0700 -o root -g root "$DATA/postgres"
 install -m 0644 "$TEMPLATE/docker-compose.yml" "$BASE/docker-compose.yml"
 install -m 0644 "$TEMPLATE/Dockerfile" "$BASE/Dockerfile"
 
