@@ -13,7 +13,7 @@ window.config = {
   routerBasename: '/',
   extensions: [],
   modes: [],
-  defaultDataSourceName: 'voxelpacs',
+  defaultDataSourceName: 'dicomweb',
   investigationalUseDialog: { option: 'never' },
   showStudyList: false,
   maxNumberOfWebWorkers: 4,
@@ -41,13 +41,13 @@ window.config = {
   dataSources: [
     {
       namespace: '@ohif/extension-default.dataSourcesModule.dicomweb',
-      sourceName: 'voxelpacs',
+      sourceName: 'dicomweb',
       configuration: {
-        friendlyName: 'Voxel View',
-        name: 'voxelpacs',
-        qidoRoot:    'https://dicom.voxelpacs.com.br/dicom-web',
-        wadoRoot:    'https://dicom.voxelpacs.com.br/dicom-web',
-        wadoUriRoot: 'https://dicom.voxelpacs.com.br/wado',
+        friendlyName: 'VOXEL PACS',
+        name: 'dicomweb',
+        qidoRoot:    'https://view.voxelpacs.com.br/dicom-web',
+        wadoRoot:    'https://view.voxelpacs.com.br/dicom-web',
+        wadoUriRoot: 'https://view.voxelpacs.com.br/dicom-web',
         requestOptions: {},
         enableStudyLazyLoad: true,
         qidoSupportsIncludeField: true,
