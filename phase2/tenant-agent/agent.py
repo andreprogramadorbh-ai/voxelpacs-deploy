@@ -30,7 +30,7 @@ import yaml
 AE_RE = re.compile(r"^[A-Z0-9_-]{1,16}$")
 SLUG_RE = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f-]{27,36}$")
-ALLOWED_ACTIONS = frozenset({"provision_cell", "configure_wireguard_echo", "enable_cstore", "suspend_route", "check_echo"})
+ALLOWED_ACTIONS = frozenset({"provision_cell", "configure_wireguard_echo", "register_control_plane", "enable_cstore", "suspend_route", "check_echo"})
 
 
 def require_role(expected: str) -> None:
@@ -308,6 +308,85 @@ def write_route(payload: dict[str, Any], allow_store: bool = False, enabled: boo
         temp_path.unlink(missing_ok=True)
 
 
+def api_db_schema() -> str:
+    schema = env("API_DB_SCHEMA", "public")
+    if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]{0,62}", schema):
+        raise AgentError("Schema administrativo inválido.")
+    return schema
+
+
+def sql_literal(value: Any) -> str:
+    if value is None:
+        return "NULL"
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def api_db_register(payload: dict[str, Any]) -> dict[str, Any]:
+    """Registra a célula após ambos agentes concluírem o provisionamento.
+
+    Este é o único ponto de escrita administrativa fora do papel da aplicação.
+    A senha é recebida já cifrada pelo Crypto PHP; não há material plaintext no
+    banco, na resposta, no journal ou na auditoria do agente.
+    """
+    require_role("api")
+    operation_id = safe_uuid(payload.get("operation_id"))
+    tenant_id = int(payload.get("tenant_id") or 0)
+    user_id = int(payload.get("user_id") or 0)
+    if tenant_id <= 0 or user_id <= 0:
+        raise AgentError("Identidade administrativa inválida.")
+    tenant = require_slug(payload.get("tenant"))
+    route_key = require_slug(payload.get("route_key"))
+    display_name = str(payload.get("display_name") or "").strip()
+    if not display_name or len(display_name) > 160:
+        raise AgentError("Nome do servidor inválido.")
+    backend_ae = require_ae(payload.get("backend_ae"), "AE do backend")
+    dicom_port = require_port(payload.get("dicom_port"))
+    dicomweb_port = require_port(payload.get("dicomweb_port"))
+    gateway_key = require_public_key(payload.get("gateway_public_key"))
+    username = str(payload.get("dicomweb_username") or "").strip()
+    password_ciphertext = str(payload.get("dicomweb_password_ciphertext") or "").strip()
+    if not re.fullmatch(r"[a-z][a-z0-9_]{1,62}", username) or len(password_ciphertext) < 24:
+        raise AgentError("Credencial interna cifrada inválida.")
+    private_url = f"http://10.0.0.3:{dicomweb_port}"
+    schema = api_db_schema()
+    sql = f"""
+BEGIN;
+SET LOCAL search_path TO {schema}, public;
+WITH operation AS (
+    SELECT id FROM bi_pacs_tenant_provisioning
+    WHERE operation_id={sql_literal(operation_id)} AND tenant_id={tenant_id} AND status='provisioning'
+    FOR UPDATE
+), server AS (
+    INSERT INTO bi_pacs_servidor (nome,url,usuario,senha,timeout,ativo,dicom_aet,dicom_port,status_ping,observacoes,updated_at)
+    SELECT {sql_literal(display_name)},{sql_literal(private_url)},{sql_literal(username)},{sql_literal(password_ciphertext)},30,1,{sql_literal(backend_ae)},{dicom_port},'pendente','Célula exclusiva VPN-only; sincronização automática desabilitada até homologação.',NOW()
+    FROM operation RETURNING id
+), cell AS (
+    INSERT INTO bi_tenant_orthanc_cells (tenant_id,servidor_id,profile,gateway_route_key,status)
+    SELECT {tenant_id}, server.id, 'vpn_only', {sql_literal(route_key)}, 'provisioned' FROM server
+    RETURNING id
+), pivot AS (
+    INSERT INTO bi_negocio_servidor_pacs (tenant_id,servidor_id,ativo,criado_por)
+    SELECT {tenant_id}, server.id, 1, {user_id} FROM server
+    ON CONFLICT (tenant_id,servidor_id) DO UPDATE SET ativo=1
+)
+UPDATE bi_pacs_tenant_provisioning p
+SET servidor_id=server.id, cell_id=cell.id, gateway_public_key={sql_literal(gateway_key)}, status='echo_ready', current_step='awaiting_echo', confirmed_by={user_id}, confirmed_at=NOW(), echo_ready_at=NOW(), updated_at=NOW()
+FROM operation, server, cell
+WHERE p.id=operation.id
+RETURNING server.id AS server_id, cell.id AS cell_id;
+COMMIT;
+"""
+    database = env("API_DB_NAME", "voxelpacs_homolog")
+    result = run(["/usr/bin/sudo", "-u", "postgres", "/usr/bin/psql", "-X", "-v", "ON_ERROR_STOP=1", "-tA", "-F", "|", "-d", database, "-c", sql], timeout=45)
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip() and "|" in line]
+    if not lines:
+        raise AgentError("Registro administrativo não retornou identificadores.")
+    server_id, cell_id = lines[-1].split("|", 1)
+    if not server_id.isdigit() or not cell_id.isdigit():
+        raise AgentError("Registro administrativo retornou identificadores inválidos.")
+    return {"status": "echo_ready", "server_id": int(server_id), "cell_id": int(cell_id), "tenant": tenant}
+
+
 def configure_wireguard_echo(payload: dict[str, Any]) -> dict[str, Any]:
     require_role("gateway")
     peer_key = require_public_key(payload.get("wireguard_public_key"))
@@ -371,6 +450,8 @@ def perform(action: str, payload: dict[str, Any]) -> dict[str, Any]:
         return provision_cell(payload)
     if action == "configure_wireguard_echo":
         return configure_wireguard_echo(payload)
+    if action == "register_control_plane":
+        return api_db_register(payload)
     if action == "enable_cstore":
         return enable_cstore(payload)
     if action == "suspend_route":

@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import time
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -58,6 +59,38 @@ class TenantAgentValidationTest(unittest.TestCase):
                 "since": int(time.time()) - 30,
             })
             self.assertEqual(result["status"], "echo_validated")
+
+    def test_api_register_builds_single_transaction_without_live_database(self) -> None:
+        os.environ["AGENT_ROLE"] = "api"
+        os.environ["API_DB_SCHEMA"] = "voxelpacs_mysql_source"
+        os.environ["API_DB_NAME"] = "voxelpacs_homolog"
+        captured: list[str] = []
+        original_run = agent.run
+        def fake_run(command, timeout=180):
+            captured.extend(command)
+            return subprocess.CompletedProcess(command, 0, "91|92\n", "")
+        agent.run = fake_run
+        try:
+            result = agent.api_db_register({
+                "operation_id": "f5d2d760-2297-4ee8-9f2d-4a91267f193a",
+                "tenant_id": 3,
+                "user_id": 7,
+                "tenant": "cliente-teste",
+                "route_key": "cliente-teste",
+                "display_name": "Orthanc Cliente Teste",
+                "backend_ae": "VOXEL_T_PACS",
+                "dicom_port": 4248,
+                "dicomweb_port": 8048,
+                "gateway_public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                "dicomweb_username": "cliente_teste_api",
+                "dicomweb_password_ciphertext": "ciphertext-with-minimum-length",
+            })
+        finally:
+            agent.run = original_run
+        self.assertEqual(result["server_id"], 91)
+        self.assertEqual(result["cell_id"], 92)
+        self.assertIn("WITH operation AS", captured[-1])
+        self.assertIn("ON CONFLICT (tenant_id,servidor_id)", captured[-1])
 
     def test_echo_validation_does_not_accept_historical_event(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

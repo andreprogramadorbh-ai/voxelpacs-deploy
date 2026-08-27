@@ -5,7 +5,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Uso: install-agent.sh --role <hybrid|gateway> --bind-host <IPv4> --api-source-ip <IPv4> --hmac-key-file <arquivo> [--port 8813]
+Uso: install-agent.sh --role <api|hybrid|gateway> --bind-host <IPv4> --api-source-ip <IPv4> --hmac-key-file <arquivo> [--port 8813]
 EOF
 }
 
@@ -27,7 +27,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ $(id -u) -eq 0 ]] || { echo 'Execute como root.' >&2; exit 1; }
-[[ "$ROLE" =~ ^(hybrid|gateway)$ ]] || { echo 'Perfil inválido.' >&2; exit 2; }
+[[ "$ROLE" =~ ^(api|hybrid|gateway)$ ]] || { echo 'Perfil inválido.' >&2; exit 2; }
 for ip in "$BIND_HOST" "$API_SOURCE_IP"; do
   [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || { echo 'IPv4 inválido.' >&2; exit 2; }
 done
@@ -69,12 +69,27 @@ GATEWAY_PRIVATE_IP=10.0.0.4
 HOST_PRIVATE_IP=10.0.0.3
 HYBRID_PRIVATE_IP=10.0.0.3
 EOF
+if [[ "$ROLE" == api ]]; then
+  cat >> "$ETC_DIR/agent.env" <<'EOF'
+API_DB_NAME=voxelpacs_homolog
+API_DB_SCHEMA=voxelpacs_mysql_source
+EOF
+  install -d -m 0755 /etc/systemd/system/voxelpacs-tenant-agent.service.d
+  cat > /etc/systemd/system/voxelpacs-tenant-agent.service.d/role-api.conf <<'EOF'
+[Service]
+# O agente da API não recebe acesso a Docker, WireGuard, UFW, gateway ou storage.
+ReadWritePaths=
+ReadWritePaths=-/etc/voxelpacs-tenant-agent -/var/lib/voxelpacs-tenant-agent -/var/log/voxelpacs
+EOF
+else
+  rm -f /etc/systemd/system/voxelpacs-tenant-agent.service.d/role-api.conf
+fi
 if [[ "$ROLE" == hybrid ]]; then
   cat >> "$ETC_DIR/agent.env" <<'EOF'
 BOOTSTRAP_SCRIPT=/opt/voxelpacs/phase2/hybrid/bootstrap-tenant.sh
 BACKUP_SCRIPT=/opt/voxelpacs/phase2/operations/backup/backup-tenant.sh
 EOF
-else
+elif [[ "$ROLE" == gateway ]]; then
   GATEWAY_AUDIT_LOG=$(awk -F: '/^[[:space:]]*log_file:/{gsub(/[[:space:]"'"'"'"'"'"']/, "", $2); print $2; exit}' /etc/voxelpacs-gateway/tenants.yaml)
   [[ "$GATEWAY_AUDIT_LOG" =~ ^/var/log/voxelpacs-gateway/ ]] || { echo 'Caminho de auditoria do gateway inválido.' >&2; exit 1; }
   cat >> "$ETC_DIR/agent.env" <<EOF
