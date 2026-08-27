@@ -361,8 +361,10 @@ def main() -> int:
     validation_only = len(sys.argv) == 3
     gateway = Gateway(Path(sys.argv[1]), prepare_audit_path=not validation_only)
     if validation_only:
-        # Valida schema, rotas habilitadas e parâmetros TLS sem abrir sockets.
+        # Valida schema, rotas habilitadas e material TLS sem abrir sockets.
         # Não lê nem processa objetos DICOM.
+        for listener in gateway.listeners.values():
+            Gateway.tls_context(listener)
         print(f"GATEWAY_CONFIG_VALID listeners={len(gateway.listeners)} enabled_routes={len(gateway.routes)}")
         return 0
     HealthHandler.gateway = gateway
