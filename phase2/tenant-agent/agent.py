@@ -526,7 +526,7 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     require_root()
     role = env("AGENT_ROLE")
-    if role not in {"hybrid", "gateway"}:
+    if role not in {"api", "hybrid", "gateway"}:
         raise RuntimeError("AGENT_ROLE inválido.")
     host = env("BIND_HOST")
     port = int(env("BIND_PORT", "8813"))
