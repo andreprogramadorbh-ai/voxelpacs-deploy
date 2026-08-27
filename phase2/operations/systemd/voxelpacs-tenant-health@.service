@@ -12,4 +12,5 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/node_exporter/textfile_collector
+# O coletor Prometheus é opcional; sem ele o script registra métricas no journal.
+ReadWritePaths=-/var/lib/node_exporter/textfile_collector
