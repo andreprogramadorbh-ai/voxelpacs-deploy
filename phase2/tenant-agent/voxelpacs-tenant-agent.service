@@ -1,0 +1,30 @@
+[Unit]
+Description=VOXEL PACS Tenant Operations Agent
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+EnvironmentFile=/etc/voxelpacs-tenant-agent/agent.env
+ExecStart=/usr/local/lib/voxelpacs/tenant-agent/agent.py
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30s
+TimeoutStopSec=20s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+ReadWritePaths=/etc/voxelpacs-tenant-agent /var/lib/voxelpacs-tenant-agent /var/log/voxelpacs /etc/voxelpacs /etc/voxelpacs-backup /var/lib/orthanc /opt/voxelpacs /etc/systemd/system /etc/wireguard /etc/voxelpacs-gateway /run/lock
+
+[Install]
+WantedBy=multi-user.target
