@@ -192,7 +192,23 @@ def provision_cell(payload: dict[str, Any]) -> dict[str, Any]:
     write_backup_contract(tenant)
     install_backup_units()
     run(["/bin/systemctl", "disable", "--now", f"voxelpacs-backup@{tenant}.timer"], timeout=30)
-    return {"tenant": tenant, "status": "cell_ready", "backup_timer": "installed_disabled"}
+    # A credencial recém-criada é devolvida somente pela conexão mTLS autenticada
+    # para ser cifrada pela API. Nunca entra em auditoria nem na resposta web.
+    tenant_env: dict[str, str] = {}
+    for line in Path(f"/etc/voxelpacs/tenants/{tenant}/tenant.env").read_text(encoding="utf-8").splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            tenant_env[key] = value
+    username = tenant_env.get("ORTHANC_USER", "")
+    password = tenant_env.get("ORTHANC_PASSWORD", "")
+    if not username or not password:
+        raise AgentError("A credencial de DICOMweb da célula não foi criada.")
+    return {
+        "tenant": tenant,
+        "status": "cell_ready",
+        "backup_timer": "installed_disabled",
+        "dicomweb_credential": {"username": username, "password": password},
+    }
 
 
 def policy_path() -> Path:
@@ -313,6 +329,16 @@ def suspend_route(payload: dict[str, Any]) -> dict[str, Any]:
     return {"status": "suspended"}
 
 
+def audit_tail(log_path: Path, max_bytes: int = 1_048_576) -> list[str]:
+    """Lê apenas o final limitado da auditoria, sem retornar linhas ao cliente."""
+    with log_path.open("rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        handle.seek(max(0, size - max_bytes), os.SEEK_SET)
+        data = handle.read()
+    return data.decode("utf-8", errors="ignore").splitlines()[-5000:]
+
+
 def check_echo(payload: dict[str, Any]) -> dict[str, Any]:
     require_role("gateway")
     tenant = require_slug(payload.get("tenant"))
@@ -323,9 +349,9 @@ def check_echo(payload: dict[str, Any]) -> dict[str, Any]:
     since = int(payload.get("since", 0))
     log_path = Path(env("GATEWAY_AUDIT_LOG", "/var/log/voxelpacs-gateway/audit.jsonl"))
     if not log_path.is_file():
-        return {"status": "pending", "message": "Ainda não há auditoria C-ECHO para esta operação."}
+        return {"status": "pending", "diagnostic_code": "ECHO_AUDIT_UNAVAILABLE", "message": "A auditoria técnica do gateway ainda não está disponível."}
     cutoff = max(0, utc_ts() - 7 * 86400, since)
-    for line in reversed(log_path.read_text(encoding="utf-8", errors="ignore").splitlines()[-5000:]):
+    for line in reversed(audit_tail(log_path)):
         try:
             row = json.loads(line)
             recorded_at = datetime.fromisoformat(str(row.get("timestamp", "")).replace("Z", "+00:00"))
@@ -334,10 +360,10 @@ def check_echo(payload: dict[str, Any]) -> dict[str, Any]:
             if int(recorded_at.timestamp()) < cutoff:
                 continue
             if row.get("tenant") == route_key and row.get("service") == "C_ECHO" and row.get("outcome") == "accepted" and row.get("source_ip") == vpn_ip and row.get("calling_ae") == calling_ae and row.get("called_ae") == called_ae:
-                return {"status": "echo_validated", "message": "C-ECHO validado pelo gateway."}
+                return {"status": "echo_validated", "diagnostic_code": "ECHO_ACCEPTED", "message": "C-ECHO validado pelo gateway."}
         except (ValueError, TypeError, json.JSONDecodeError):
             continue
-    return {"status": "pending", "message": "C-ECHO ainda não foi recebido com os parâmetros cadastrados."}
+    return {"status": "pending", "diagnostic_code": "ECHO_AUDIT_NO_MATCH", "message": "Nenhum C-ECHO aceito corresponde ainda ao peer, Calling AE e Called AE cadastrados. Verifique o túnel, os AE Titles e o horário do teste."}
 
 
 def perform(action: str, payload: dict[str, Any]) -> dict[str, Any]:
