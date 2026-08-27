@@ -68,12 +68,13 @@ def utc_now() -> str:
 
 
 class Gateway:
-    def __init__(self, config_path: Path) -> None:
+    def __init__(self, config_path: Path, prepare_audit_path: bool = True) -> None:
         self.config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         if not isinstance(self.config, dict):
             raise ValueError("A configuração do gateway deve ser um objeto YAML")
         self.audit_path = Path(self.config["audit"]["log_file"])
-        self.audit_path.parent.mkdir(parents=True, exist_ok=True)
+        if prepare_audit_path:
+            self.audit_path.parent.mkdir(parents=True, exist_ok=True)
         self._audit_lock = threading.Lock()
         self.listeners = self._load_listeners()
         self.routes = self._load_routes(self.config.get("tenants", []))
@@ -354,10 +355,16 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    if len(sys.argv) != 2:
-        print("usage: gateway.py /etc/voxelpacs-gateway/tenants.yaml", file=sys.stderr)
+    if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != "--validate"):
+        print("usage: gateway.py /etc/voxelpacs-gateway/tenants.yaml [--validate]", file=sys.stderr)
         return 2
-    gateway = Gateway(Path(sys.argv[1]))
+    validation_only = len(sys.argv) == 3
+    gateway = Gateway(Path(sys.argv[1]), prepare_audit_path=not validation_only)
+    if validation_only:
+        # Valida schema, rotas habilitadas e parâmetros TLS sem abrir sockets.
+        # Não lê nem processa objetos DICOM.
+        print(f"GATEWAY_CONFIG_VALID listeners={len(gateway.listeners)} enabled_routes={len(gateway.routes)}")
+        return 0
     HealthHandler.gateway = gateway
     health = ThreadingHTTPServer(("127.0.0.1", 8081), HealthHandler)
     threading.Thread(target=health.serve_forever, daemon=True).start()
