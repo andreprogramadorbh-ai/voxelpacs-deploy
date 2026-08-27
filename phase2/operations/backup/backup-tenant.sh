@@ -35,22 +35,29 @@ TENANT_COMPOSE="/opt/voxelpacs/phase2/hybrid/tenants/${TENANT}/docker-compose.ym
 TENANT_DATA="/var/lib/orthanc/tenants/${TENANT}"
 CONFIG_ROOT="/etc/voxelpacs/tenants/${TENANT}"
 
-for REQUIRED in "$COMMON_ENV" "$TENANT_ENV" "$TENANT_APP_ENV" "$TENANT_COMPOSE" "$TENANT_DATA/dicom" "$CONFIG_ROOT"; do
+for REQUIRED in "$TENANT_ENV" "$TENANT_APP_ENV" "$TENANT_COMPOSE" "$TENANT_DATA/dicom" "$CONFIG_ROOT"; do
   [[ -f "$REQUIRED" || -d "$REQUIRED" ]] || { echo "Pré-requisito ausente: $REQUIRED" >&2; exit 1; }
 done
+
+# O contrato individual é lido primeiro: backups desabilitados não devem exigir,
+# carregar ou validar credenciais de Object Storage ainda não aprovadas.
+set -a
+. "$TENANT_ENV"
+set +a
+[[ "${BACKUP_ENABLED:-false}" == "true" ]] || { echo "Backup de ${TENANT} permanece desabilitado no contrato"; exit 0; }
+
+[[ -f "$COMMON_ENV" ]] || { echo "Configuração comum de backup ausente" >&2; exit 1; }
 command -v restic >/dev/null || { echo "restic não instalado" >&2; exit 1; }
 command -v docker >/dev/null || { echo "Docker não instalado" >&2; exit 1; }
 docker compose version >/dev/null || { echo "Docker Compose V2 é obrigatório" >&2; exit 1; }
 
-# common.env contém somente referências operacionais ao bucket cifrado e à senha;
+# common.env contém referências operacionais ao bucket cifrado e à senha;
 # tenant.env define um namespace próprio. Nunca exibir seus conteúdos em logs.
 set -a
 . "$COMMON_ENV"
-. "$TENANT_ENV"
 . "$TENANT_APP_ENV"
 set +a
 
-[[ "${BACKUP_ENABLED:-false}" == "true" ]] || { echo "Backup de ${TENANT} permanece desabilitado no contrato"; exit 0; }
 [[ -n "${RESTIC_REPOSITORY_BASE:-}" && -n "${BACKUP_NAMESPACE:-}" && -n "${RESTIC_PASSWORD_FILE:-}" ]] || { echo "Configuração Restic incompleta" >&2; exit 1; }
 [[ "$BACKUP_NAMESPACE" == "$TENANT" ]] || { echo "Namespace de backup deve coincidir com o tenant" >&2; exit 1; }
 [[ -f "$RESTIC_PASSWORD_FILE" ]] || { echo "Arquivo de senha Restic ausente" >&2; exit 1; }
